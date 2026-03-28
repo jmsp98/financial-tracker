@@ -68,10 +68,27 @@ Categories are matched using keyword patterns defined in `config.yaml`. You can 
 
 ## Privacy & Security
 
-- All processing happens locally on your machine
-- No data is sent to external services
-- Bank statements should be placed in the git-ignored `data/` folder
-- No API keys or tokens required
+🔒 **Your Financial Data Stays Private**
+
+- All processing happens **locally** on your machine
+- No data is sent to external services or APIs
+- Bank statements are stored in the **git-ignored `data/` folder**
+- No API keys, tokens, or internet connection required for processing
+
+⚠️ **Important Security Notes**
+
+- The `data/` directory is **automatically excluded** from git commits
+- **Never commit real bank statements** to version control
+- Test and demo scripts use **synthetic data only**
+- Your real financial information never appears in code or commits
+
+🧪 **Testing with Synthetic Data**
+
+All parser testing uses completely synthetic bank statement data:
+```bash
+python scripts/demo_parser_safe.py  # Safe demo with fake data
+python -m pytest tests/            # Unit tests with synthetic data
+```
 
 ## Commands
 
