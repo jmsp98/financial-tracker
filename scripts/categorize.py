@@ -87,7 +87,13 @@ def main(input_dir: str, output_dir: str, use_ml: bool = True) -> bool:
             logger.warning(f"No JSON files found in {input_dir}")
             return False
         
-        logger.info(f"Found {len(json_files)} transaction files to categorize")
+        # Process only the combined file to avoid duplicates
+        # The individual statement files are subsets of all_transactions.json
+        if 'all_transactions.json' in json_files:
+            json_files = ['all_transactions.json']
+            logger.info(f"Processing combined transaction file to avoid duplicates")
+        else:
+            logger.info(f"Found {len(json_files)} transaction files to categorize")
         
         # Initialize hybrid categorizer
         categorizer = HybridCategorizer(use_ml=use_ml)

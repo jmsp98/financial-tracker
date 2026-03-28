@@ -4,7 +4,7 @@ Interactive Dash dashboard for financial data visualization.
 
 try:
     import dash
-    from dash import dcc, html, Input, Output, callback
+    from dash import dcc, html, Input, Output, callback, State
     import dash_bootstrap_components as dbc
     import plotly.express as px
     import plotly.graph_objects as go
@@ -139,67 +139,30 @@ class FinancialDashboard:
                 ], width=12)
             ], className="mb-4"),
             
-            # Charts
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader("Monthly Income vs Expenses"),
-                        dbc.CardBody([
-                            dcc.Graph(id="monthly-trend-chart")
-                        ])
-                    ])
-                ], width=6),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader("Spending by Category"),
-                        dbc.CardBody([
-                            dcc.Graph(id="category-pie-chart")
-                        ])
-                    ])
-                ], width=6),
-            ], className="mb-4"),
+            # Tabs for different views
+            dbc.Tabs([
+                dbc.Tab(label="📊 Analytics", tab_id="analytics"),
+                dbc.Tab(label="🔍 Review 'Other'", tab_id="review-other"),
+                dbc.Tab(label="📋 All Transactions", tab_id="all-transactions"),
+            ], id="main-tabs", active_tab="analytics"),
             
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader("Monthly Category Breakdown"),
-                        dbc.CardBody([
-                            dcc.Graph(id="category-trends-chart")
-                        ])
-                    ])
-                ], width=12)
-            ], className="mb-4"),
-            
-            # Transaction table
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader("Recent Transactions"),
-                        dbc.CardBody([
-                            html.Div(id="transactions-table")
-                        ])
-                    ])
-                ], width=12)
-            ])
+            html.Div(id="tab-content", className="mt-4")
             
         ], fluid=True)
     
     def setup_callbacks(self):
         """Setup dashboard callbacks."""
         
+        # Callback for updating summary cards
         @self.app.callback(
             [Output('total-income', 'children'),
              Output('total-expenses', 'children'), 
              Output('net-income', 'children'),
-             Output('total-transactions', 'children'),
-             Output('monthly-trend-chart', 'figure'),
-             Output('category-pie-chart', 'figure'),
-             Output('category-trends-chart', 'figure'),
-             Output('transactions-table', 'children')],
+             Output('total-transactions', 'children')],
             [Input('date-range-picker', 'start_date'),
              Input('date-range-picker', 'end_date')]
         )
-        def update_dashboard(start_date, end_date):
+        def update_summary_cards(start_date, end_date):
             # Filter data by date range
             if start_date:
                 start_date = datetime.fromisoformat(start_date)
@@ -221,29 +184,39 @@ class FinancialDashboard:
             net_str = f"${net_income:,.2f}"
             net_color = "text-success" if net_income >= 0 else "text-danger"
             
-            # Monthly trends chart
-            monthly_data = analyzer.calculate_monthly_summary(filtered_data)
-            monthly_trend_fig = self.create_monthly_trends_chart(monthly_data)
-            
-            # Category pie chart
-            category_pie_fig = self.create_category_pie_chart(filtered_data)
-            
-            # Category trends chart
-            category_trends_fig = self.create_category_trends_chart(filtered_data)
-            
-            # Transactions table
-            transactions_table = self.create_transactions_table(filtered_data[:50])  # Show 50 most recent
-            
             return (
                 income_str,
                 expenses_str, 
                 html.Span(net_str, className=net_color),
                 f"{len(filtered_data):,}",
-                monthly_trend_fig,
-                category_pie_fig,
-                category_trends_fig,
-                transactions_table
             )
+        
+        # Callback for tab content
+        @self.app.callback(
+            Output('tab-content', 'children'),
+            [Input('main-tabs', 'active_tab'),
+             Input('date-range-picker', 'start_date'),
+             Input('date-range-picker', 'end_date')]
+        )
+        def update_tab_content(active_tab, start_date, end_date):
+            # Filter data by date range
+            if start_date:
+                start_date = datetime.fromisoformat(start_date)
+            if end_date:
+                end_date = datetime.fromisoformat(end_date)
+            
+            filtered_data = analyzer.filter_transactions_by_date_range(
+                self.categorized_data, start_date, end_date
+            )
+            
+            if active_tab == "analytics":
+                return self.create_analytics_tab(filtered_data)
+            elif active_tab == "review-other":
+                return self.create_review_other_tab(filtered_data)
+            elif active_tab == "all-transactions":
+                return self.create_all_transactions_tab(filtered_data)
+            
+            return html.Div("Select a tab")
     
     def create_monthly_trends_chart(self, monthly_data: Dict) -> go.Figure:
         """Create monthly income vs expenses chart."""
@@ -401,6 +374,232 @@ class FinancialDashboard:
         body = html.Tbody(rows)
         
         return dbc.Table([header, body], striped=True, bordered=True, hover=True, size="sm")
+    
+    def create_analytics_tab(self, filtered_data):
+        """Create the analytics tab content."""
+        # Monthly trends chart
+        monthly_data = analyzer.calculate_monthly_summary(filtered_data)
+        monthly_trend_fig = self.create_monthly_trends_chart(monthly_data)
+        
+        # Category pie chart
+        category_pie_fig = self.create_category_pie_chart(filtered_data)
+        
+        # Category trends chart
+        category_trends_fig = self.create_category_trends_chart(filtered_data)
+        
+        # Transactions table
+        transactions_table = self.create_transactions_table(filtered_data[:50])  # Show 50 most recent
+        
+        return html.Div([
+            # Charts
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Monthly Income vs Expenses"),
+                        dbc.CardBody([
+                            dcc.Graph(figure=monthly_trend_fig)
+                        ])
+                    ])
+                ], width=6),
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Spending by Category"),
+                        dbc.CardBody([
+                            dcc.Graph(figure=category_pie_fig)
+                        ])
+                    ])
+                ], width=6),
+            ], className="mb-4"),
+            
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Monthly Category Breakdown"),
+                        dbc.CardBody([
+                            dcc.Graph(figure=category_trends_fig)
+                        ])
+                    ])
+                ], width=12)
+            ], className="mb-4"),
+            
+            # Transaction table
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Recent Transactions"),
+                        dbc.CardBody([
+                            transactions_table
+                        ])
+                    ])
+                ], width=12)
+            ])
+        ])
+    
+    def create_review_other_tab(self, filtered_data):
+        """Create the review 'other' transactions tab."""
+        # Filter for 'other' category transactions
+        other_transactions = [t for t in filtered_data if t.get('category', '').lower() == 'other']
+        
+        if not other_transactions:
+            return dbc.Alert("🎉 Great! No transactions are categorized as 'Other'. Your ML model is working well!", color="success")
+        
+        # Get available categories for dropdown
+        all_categories = set()
+        for t in self.categorized_data:
+            if t.get('category') and t['category'].lower() != 'other':
+                all_categories.add(t['category'].title())
+        
+        category_options = [{'label': cat, 'value': cat.lower()} for cat in sorted(all_categories)]
+        category_options.extend([
+            {'label': 'Groceries', 'value': 'groceries'},
+            {'label': 'Dining', 'value': 'dining'},
+            {'label': 'Transportation', 'value': 'transportation'},
+            {'label': 'Bills', 'value': 'bills'},
+            {'label': 'Shopping', 'value': 'shopping'},
+            {'label': 'Entertainment', 'value': 'entertainment'},
+            {'label': 'Healthcare', 'value': 'healthcare'},
+            {'label': 'Housing', 'value': 'housing'},
+            {'label': 'Income', 'value': 'income'},
+        ])
+        
+        # Remove duplicates and sort
+        seen = set()
+        unique_options = []
+        for opt in category_options:
+            if opt['value'] not in seen:
+                seen.add(opt['value'])
+                unique_options.append(opt)
+        category_options = sorted(unique_options, key=lambda x: x['label'])
+        
+        # Create simple table rows for the first 20 "other" transactions
+        transaction_rows = []
+        for i, transaction in enumerate(other_transactions[:20]):
+            date_str = transaction['date'].strftime('%Y-%m-%d') if hasattr(transaction['date'], 'strftime') else str(transaction['date'])
+            desc = transaction['description'][:60] + "..." if len(transaction['description']) > 60 else transaction['description']
+            amount = f"${transaction['amount']:.2f}"
+            amount_color = "text-danger" if transaction['amount'] < 0 else "text-success"
+            
+            row = html.Tr([
+                html.Td(date_str),
+                html.Td(desc, title=transaction['description']),  # Full description on hover
+                html.Td(amount, className=amount_color),
+                html.Td([
+                    dcc.Dropdown(
+                        id=f'category-dropdown-{i}',
+                        options=category_options,
+                        placeholder="Select category...",
+                        style={'minWidth': '150px'}
+                    )
+                ]),
+                html.Td([
+                    dbc.Button("✓", id=f'apply-btn-{i}', size="sm", color="success", disabled=True)
+                ])
+            ])
+            transaction_rows.append(row)
+        
+        # Create table
+        review_table = dbc.Table([
+            html.Thead([
+                html.Tr([
+                    html.Th("Date"),
+                    html.Th("Description"),
+                    html.Th("Amount"),
+                    html.Th("New Category"),
+                    html.Th("Apply")
+                ])
+            ]),
+            html.Tbody(transaction_rows)
+        ], striped=True, bordered=True, hover=True, responsive=True)
+        
+        return html.Div([
+            dbc.Alert([
+                html.H4("🔍 Review 'Other' Transactions", className="alert-heading"),
+                html.P(f"Found {len(other_transactions)} transactions categorized as 'Other'. Select the correct category for each transaction."),
+                html.Hr(),
+                html.P("Choose a category from the dropdown and click the ✓ button to apply the correction.", className="mb-0")
+            ], color="info"),
+            
+            html.Div([
+                review_table
+            ], className="mb-4"),
+            
+            html.Div([
+                dbc.Alert([
+                    html.H5("💡 Quick Tip"),
+                    html.P("After correcting a few transactions, the ML model will learn your patterns and automatically categorize similar transactions in the future!")
+                ], color="light")
+            ], className="mb-4"),
+            
+            html.Div(id="simple-recategorize-feedback")
+        ])
+    
+    def create_all_transactions_tab(self, filtered_data):
+        """Create the all transactions tab."""
+        transactions_table = self.create_transactions_table(filtered_data)
+        
+        return html.Div([
+            dbc.Card([
+                dbc.CardHeader(f"All Transactions ({len(filtered_data)} total)"),
+                dbc.CardBody([
+                    transactions_table
+                ])
+            ])
+        ])
+    
+    def apply_recategorizations(self, table_data):
+        """Apply user recategorizations and retrain the ML model."""
+        try:
+            from .user_feedback import UserFeedbackManager
+            
+            # Filter for rows with new categories
+            corrections = []
+            for row in table_data:
+                if row.get('new_category'):
+                    corrections.append({
+                        'description': row.get('description', ''),
+                        'original_category': row.get('current_category', 'other'),
+                        'new_category': row.get('new_category', ''),
+                        'date': row.get('date', ''),
+                        'amount': row.get('amount', '')
+                    })
+            
+            if not corrections:
+                return dbc.Alert("No changes to apply.", color="warning")
+            
+            # Apply corrections using the feedback manager
+            feedback_manager = UserFeedbackManager()
+            
+            # Save user feedback
+            if not feedback_manager.save_user_corrections(corrections):
+                return dbc.Alert("Error saving user corrections.", color="danger")
+            
+            # Apply corrections to dataset
+            if not feedback_manager.apply_corrections_to_dataset(corrections):
+                return dbc.Alert("Error applying corrections to dataset.", color="danger")
+            
+            # Retrain ML model
+            training_results = feedback_manager.retrain_ml_model()
+            
+            if 'error' in training_results:
+                return dbc.Alert(f"Error retraining model: {training_results['error']}", color="danger")
+            
+            # Success message with training stats
+            accuracy = training_results.get('test_accuracy', 0)
+            return dbc.Alert([
+                html.H5("✅ Changes Applied Successfully!"),
+                html.P(f"Updated {len(corrections)} transactions and retrained the ML model."),
+                html.P(f"New model accuracy: {accuracy:.1%}"),
+                html.Hr(),
+                html.P([
+                    "🔄 ",
+                    dbc.Button("Refresh Dashboard", href="/", color="primary", size="sm"),
+                    " to see the updated categorization."
+                ], className="mb-0")
+            ], color="success")
+            
+        except Exception as e:
+            logger.error(f"Error in apply_recategorizations: {e}")
+            return dbc.Alert(f"Error applying changes: {str(e)}", color="danger")
     
     def run(self, host='127.0.0.1', port=8050, debug=False):
         """Run the dashboard."""

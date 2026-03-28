@@ -35,9 +35,10 @@ class RuleBasedCategorizer:
                 # Make it case-insensitive and match word boundaries
                 pattern_parts = []
                 for keyword in keywords:
-                    # Escape special regex characters and add word boundaries
+                    # Escape special regex characters - use partial matching instead of word boundaries
+                    # This allows "sainsbury" to match "SAINSBURYS", "tesco" to match "TESCO STORES", etc.
                     escaped_keyword = re.escape(keyword.lower())
-                    pattern_parts.append(f"\\b{escaped_keyword}\\b")
+                    pattern_parts.append(escaped_keyword)
                 
                 if pattern_parts:
                     pattern = "|".join(pattern_parts)

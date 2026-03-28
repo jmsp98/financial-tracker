@@ -155,6 +155,23 @@ class HSBCParser(BaseBankParser):
                 i += 1
                 continue
             
+            # Skip footer content that sometimes gets mixed in
+            if any(pattern in line for pattern in [
+                'Information about the Financial Services',
+                'Contact tel',
+                'www.hsbc.co.uk', 
+                'Registered in England',
+                'Authorised by the Prudential',
+                'Customer information:',
+                'HSBC UK Bank plc',
+                'Centenary Square',
+                'Your Statement Account Name',
+                'Financial Services Compensation',
+                'Scheme Information Sheet'
+            ]):
+                i += 1
+                continue
+            
             # Check if this line starts with a date
             date_match = re.match(r'(\d{1,2}\s+\w{3}\s+\d{2})', line)
             
@@ -213,10 +230,15 @@ class HSBCParser(BaseBankParser):
             if re.match(r'\d{1,2}\s+\w{3}\s+\d{2}', line.strip()):
                 break
             
-            # Stop if we hit end markers
+            # Stop if we hit end markers or footer content
             if ('BALANCE CARRIED FORWARD' in line or 
                 'BALANCE BROUGHT FORWARD' in line or
+                'Contact tel' in line or  # Footer contact info
+                'www.hsbc.co.uk' in line or  # Footer website
+                'Information about the Financial Services' in line or  # Footer disclaimer
+                'Financial Services Compensation' in line or  # Footer FSCS info
                 not line.strip()):
+                # Don't include these lines and move to next
                 i += 1
                 continue
             
@@ -238,11 +260,34 @@ class HSBCParser(BaseBankParser):
         
         Key insight: Each line with a payment method (DD, VIS, ))), CR) 
         or amount is typically a separate transaction.
+        
+        Note: BALANCE BROUGHT FORWARD and BALANCE CARRIED FORWARD are page 
+        continuation markers, not transactions.
         """
         transactions = []
         
-        # Combine lines and then split by transaction indicators
+        # Combine lines and clean up page boundary markers
         combined_text = '\n'.join(lines)
+        
+        # Remove page boundary content that gets mixed with transaction text
+        # These patterns appear at page breaks in HSBC PDFs
+        page_boundary_patterns = [
+            r'BALANCEBROUGHTFORWARD[^A-Z]*',  # Balance brought forward with any trailing content
+            r'BALANCECARRIEDFORWARD[^A-Z]*',  # Balance carried forward with any trailing content
+            r'- SampleArea Road Sample City SW.*?(?=[A-Z][A-Z]|$)',  # Address line until next transaction
+            r'see reverse for call times.*?(?=[A-Z][A-Z]|$)',  # Footer text until next transaction
+            r'Text phone used by deaf.*?(?=[A-Z][A-Z]|$)',  # Accessibility text until next transaction
+            r'Your Statement Account Name.*?(?=[A-Z][A-Z]|$)',  # Statement header until next transaction
+            r'ACCOUNT_HOLDER.*?(?=[A-Z][A-Z]|$)',  # Account holder name until next transaction
+            r'Your Bank Account details.*?(?=[A-Z][A-Z]|$)',  # Account details until next transaction
+            r'Date Payment type and details.*?(?=[A-Z][A-Z]|$)',  # Table header until next transaction
+        ]
+        
+        for pattern in page_boundary_patterns:
+            combined_text = re.sub(pattern, ' ', combined_text, flags=re.IGNORECASE | re.DOTALL)
+        
+        # Clean up extra whitespace and newlines
+        combined_text = re.sub(r'\s+', ' ', combined_text).strip()
         
         # Split by payment method indicators that start a new transaction
         payment_indicators = ['DD ', 'VIS ', '))) ', 'CR ', 'TFR ']
@@ -264,8 +309,11 @@ class HSBCParser(BaseBankParser):
         transaction_starts.sort()
         
         if not transaction_starts:
-            # No payment indicators found, treat whole thing as one transaction
-            # This handles cases like "BALANCE BROUGHT FORWARD"
+            # No payment indicators found, check if this is just page boundary content
+            if any(marker in combined_text.upper() for marker in ['BALANCEBROUGHTFORWARD', 'BALANCECARRIEDFORWARD']):
+                logger.debug(f"Skipping page boundary content for {date.strftime('%Y-%m-%d')}")
+                return []
+            # Otherwise treat whole thing as one transaction
             transaction_starts = [0]
         
         # Extract each transaction
@@ -334,6 +382,28 @@ class HSBCParser(BaseBankParser):
         
         Uses column positions to correctly extract amounts.
         """
+        # Skip if this is clearly footer content
+        footer_indicators = [
+            'Information about the Financial Services',
+            'Contact tel',
+            'www.hsbc.co.uk', 
+            'Registered in England',
+            'Authorised by the Prudential',
+            'Customer information:',
+            'HSBC UK Bank plc',
+            'Centenary Square',
+            'Your Statement Account Name',
+            'Financial Services Compensation',
+            'about the compensation provided by the FSCS',
+            'refer to the FSCS website',
+            'Scheme Information Sheet'
+        ]
+        
+        for indicator in footer_indicators:
+            if indicator in txn_text:
+                logger.debug(f"Skipping footer content: {txn_text[:100]}...")
+                return None
+        
         lines = txn_text.split('\n')
         
         # Extract payment method from first line
@@ -513,6 +583,23 @@ class HSBCParser(BaseBankParser):
         
         # Remove all amounts
         clean_line = re.sub(amount_pattern, ' ', line)
+        
+        # Remove footer text patterns that often get concatenated
+        footer_patterns = [
+            r'BALANCECARRIEDFORWARD.*',  # Everything after BALANCECARRIEDFORWARD
+            r'Contact tel.*',  # Footer contact information
+            r'www\.hsbc\.co\.uk.*',  # Website and everything after
+            r'Information about the Financial Services.*',  # FSCS disclaimer
+            r'Financial Services Compensation.*',  # FSCS info
+            r'Your deposit is eligible.*',  # FSCS eligibility text
+            r'- SampleArea Road.*',  # Address information
+            r'HHSSBBCC.*',  # Legal footer text
+            r'Registered in England.*',  # Company registration
+            r'Authorised by the Prudential.*',  # Regulatory info
+        ]
+        
+        for pattern in footer_patterns:
+            clean_line = re.sub(pattern, '', clean_line, flags=re.IGNORECASE)
         
         # Clean up extra whitespace
         clean_line = re.sub(r'\s+', ' ', clean_line).strip()

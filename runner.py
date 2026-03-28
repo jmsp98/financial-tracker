@@ -77,7 +77,8 @@ def process(input_dir, output_dir):
 @cli.command()
 @click.option('--input-dir', help='Directory containing processed transaction data')
 @click.option('--output-dir', help='Directory to save categorized data')
-def categorize(input_dir, output_dir):
+@click.option('--no-ml', is_flag=True, help='Disable ML categorization, use rules-only')
+def categorize(input_dir, output_dir, no_ml):
     """Categorize processed transactions using rule-based matching."""
     try:
         from scripts.categorize import main as categorize_main
@@ -90,7 +91,7 @@ def categorize(input_dir, output_dir):
         click.echo(f"Categorizing transactions from: {input_dir}")
         click.echo(f"Saving results to: {output_dir}")
         
-        result = categorize_main(input_dir, output_dir)
+        result = categorize_main(input_dir, output_dir, use_ml=not no_ml)
         
         if result:
             click.echo("✅ Categorization complete!")
@@ -107,9 +108,37 @@ def categorize(input_dir, output_dir):
 @click.option('--host', default='127.0.0.1', help='Host to run dashboard on')
 @click.option('--port', default=8050, help='Port to run dashboard on')
 @click.option('--debug', is_flag=True, help='Run in debug mode')
-def dashboard(host, port, debug):
+@click.option('--refresh', is_flag=True, help='Refresh processed data before launching dashboard')
+def dashboard(host, port, debug, refresh):
     """Launch the interactive web dashboard."""
     try:
+        # Refresh data if requested
+        if refresh:
+            click.echo("🔄 Refreshing data before launching dashboard...")
+            
+            # Import the processing and categorization functions
+            from scripts.process_statements import main as process_main
+            from scripts.categorize import main as categorize_main
+            
+            # Get default paths
+            raw_dir = config.get('data.raw_statements', './data/raw')
+            processed_dir = config.get('data.processed', './data/processed')
+            categorized_dir = config.get('data.categorized', './data/categorized')
+            
+            # Process PDFs (very fast - only 1.3s)
+            click.echo("  📄 Processing PDFs...")
+            if not process_main(raw_dir, processed_dir):
+                click.echo("❌ Failed to process PDFs")
+                sys.exit(1)
+            
+            # Categorize transactions with ML
+            click.echo("  🤖 Categorizing with ML...")
+            if not categorize_main(processed_dir, categorized_dir, use_ml=True):
+                click.echo("❌ Failed to categorize transactions")
+                sys.exit(1)
+                
+            click.echo("✅ Data refresh complete!")
+        
         from src.dashboard import dashboard
         
         if dashboard is None:
