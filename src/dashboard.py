@@ -262,22 +262,28 @@ class FinancialDashboard:
         
         # Callback for individual apply buttons
         @self.app.callback(
-            Output('review-feedback-messages', 'children'),
+            [Output('review-feedback-messages', 'children'),
+             Output('tab-content', 'children')],  # Refresh the tab content
             [Input({'type': 'group-apply-btn', 'index': ALL}, 'n_clicks')],
             [State({'type': 'group-category-dropdown', 'index': ALL}, 'value'),
-             State({'type': 'group-subcategory-dropdown', 'index': ALL}, 'value')],
+             State({'type': 'group-subcategory-dropdown', 'index': ALL}, 'value'),
+             State('main-tabs', 'active_tab'),
+             State('date-range-picker', 'start_date'),
+             State('date-range-picker', 'end_date')],
             prevent_initial_call=True
         )
-        def handle_apply_button_clicks(n_clicks_list, category_values, subcategory_values):
+        def handle_apply_button_clicks(n_clicks_list, category_values, subcategory_values, 
+                                     active_tab, start_date, end_date):
             """Handle apply button clicks for individual transaction groups."""
             if not any(n_clicks_list) or not category_values:
-                return ""
+                return "", dash.no_update
             
             # Find which button was clicked
             import dash
+            from dash import no_update
             ctx = dash.callback_context
             if not ctx.triggered:
-                return ""
+                return "", no_update
             
             button_id = ctx.triggered[0]['prop_id'].split('.')[0]
             clicked_index = json.loads(button_id)['index']
@@ -293,20 +299,41 @@ class FinancialDashboard:
                     break
             
             if not clicked_category:
-                return dbc.Alert("Please select a category first.", color="warning", duration=3000)
+                return dbc.Alert("Please select a category first.", color="warning", duration=3000), no_update
             
-            # TODO: Implement actual transaction updating logic here
-            # For now, show a success message
+            # Apply the categorization to transactions
+            success_result = self._apply_categorization(clicked_index, clicked_category, clicked_subcategory)
             
-            category_display = clicked_category.replace('_', ' ').title()
-            subcategory_display = clicked_subcategory.replace('_', ' ').title() if clicked_subcategory else 'General'
-            
-            return dbc.Alert([
-                html.Strong("✅ Applied!"), 
-                f" Categorized as {category_display} → {subcategory_display}. ",
-                html.Small("(Note: This is a demo - actual implementation would update the database)", 
-                          className="text-muted")
-            ], color="success", duration=5000)
+            if success_result['success']:
+                # Refresh the tab content to remove the applied row
+                if start_date:
+                    start_date = datetime.fromisoformat(start_date)
+                if end_date:
+                    end_date = datetime.fromisoformat(end_date)
+                
+                filtered_data = analyzer.filter_transactions_by_date_range(
+                    self.categorized_data, start_date, end_date
+                )
+                
+                new_tab_content = self.create_review_other_tab(filtered_data)
+                
+                category_display = clicked_category.replace('_', ' ').title()
+                subcategory_display = clicked_subcategory.replace('_', ' ').title() if clicked_subcategory else 'General'
+                
+                feedback = dbc.Alert([
+                    html.Strong("✅ Applied Successfully!"), 
+                    f" Categorized {success_result['count']} transactions as {category_display} → {subcategory_display}. ",
+                    f"Row removed from table."
+                ], color="success", duration=4000)
+                
+                return feedback, new_tab_content
+            else:
+                feedback = dbc.Alert([
+                    html.Strong("❌ Error!"), 
+                    f" {success_result['error']}"
+                ], color="danger", duration=5000)
+                
+                return feedback, no_update
     
     def create_category_pie_chart(self, transactions: List[Dict]) -> go.Figure:
         """Create category spending pie chart."""
@@ -631,6 +658,83 @@ class FinancialDashboard:
                 return 'healthcare', 'medical'
         
         return None
+    
+    def _apply_categorization(self, group_index, category, subcategory):
+        """Apply categorization to a specific group of transactions."""
+        try:
+            # We need to find transactions by their description since group_index 
+            # corresponds to the order they appear in the Review Other tab
+            
+            # Get other transactions to find the matching group
+            other_transactions = [t for t in self.categorized_data if t.get('category', '').lower() == 'other']
+            
+            if not other_transactions:
+                return {'success': False, 'error': 'No other transactions found'}
+            
+            # Group by description
+            from collections import defaultdict
+            desc_groups = defaultdict(list)
+            for txn in other_transactions:
+                desc = txn['description'].strip()
+                desc_groups[desc].append(txn)
+            
+            # Sort groups by frequency (same as in UI)
+            sorted_groups = sorted(desc_groups.items(), key=lambda x: len(x[1]), reverse=True)
+            
+            # Find the group corresponding to the clicked index
+            if group_index > len(sorted_groups):
+                return {'success': False, 'error': 'Invalid group index'}
+            
+            target_description, target_transactions = sorted_groups[group_index - 1]  # group_index is 1-based
+            
+            # Update all transactions in this group
+            updated_count = 0
+            for txn in target_transactions:
+                # Find the transaction in the main data and update it
+                for i, main_txn in enumerate(self.categorized_data):
+                    if (main_txn['description'] == txn['description'] and 
+                        main_txn['amount'] == txn['amount'] and
+                        main_txn['date'] == txn['date']):
+                        
+                        self.categorized_data[i]['category'] = category
+                        self.categorized_data[i]['subcategory'] = subcategory or 'unknown'
+                        updated_count += 1
+                        break
+            
+            if updated_count > 0:
+                # Save the updated data back to file
+                self._save_categorized_data()
+                return {'success': True, 'count': updated_count}
+            else:
+                return {'success': False, 'error': 'No transactions were updated'}
+                
+        except Exception as e:
+            logger.error(f"Error applying categorization: {e}")
+            return {'success': False, 'error': f'Error: {str(e)}'}
+    
+    def _save_categorized_data(self):
+        """Save the updated categorized data back to the file."""
+        try:
+            categorized_path = config.get('data.categorized', './data/categorized')
+            file_path = os.path.join(categorized_path, 'all_categorized_transactions.json')
+            
+            # Convert datetime objects to ISO strings for JSON serialization
+            data_to_save = []
+            for txn in self.categorized_data:
+                txn_copy = txn.copy()
+                if isinstance(txn_copy['date'], datetime):
+                    txn_copy['date'] = txn_copy['date'].isoformat()
+                data_to_save.append(txn_copy)
+            
+            with open(file_path, 'w') as f:
+                json.dump(data_to_save, f, indent=2)
+                
+            logger.info(f"Saved {len(data_to_save)} transactions to {file_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving categorized data: {e}")
+            return False
     
     def create_transactions_table(self, transactions: List[Dict], sort_by_date: bool = True) -> html.Table:
         """Create transactions table."""
