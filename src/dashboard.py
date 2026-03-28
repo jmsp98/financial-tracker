@@ -228,67 +228,49 @@ class FinancialDashboard:
     def setup_review_callbacks(self):
         """Setup callbacks for the enhanced Review Other functionality."""
         
-        # Clientside callback to set up dropdown dependencies
-        self.app.clientside_callback(
-            """
-            function(n_intervals, subcategory_data_json) {
-                if (!subcategory_data_json || n_intervals === 0) return "";
-                
-                const subcategory_data = JSON.parse(subcategory_data_json);
-                
-                // Set up dropdown dependencies
-                setTimeout(function() {
-                    // Find all category dropdowns
-                    const categoryDropdowns = document.querySelectorAll('[id*="group-category-dropdown-"]');
-                    
-                    categoryDropdowns.forEach(function(categoryDropdown) {
-                        // Extract group ID from the dropdown ID
-                        const groupId = categoryDropdown.id.split('-').pop();
-                        const subcategoryDropdown = document.getElementById('group-subcategory-dropdown-' + groupId);
-                        
-                        if (subcategoryDropdown && !categoryDropdown.hasAttribute('data-listener-added')) {
-                            // Mark that we've added the listener to avoid duplicates
-                            categoryDropdown.setAttribute('data-listener-added', 'true');
-                            
-                            // Add change event listener to category dropdown
-                            categoryDropdown.addEventListener('change', function() {
-                                const selectedCategory = this.value;
-                                
-                                // Clear subcategory dropdown
-                                subcategoryDropdown.innerHTML = '<option value="">Select subcategory...</option>';
-                                
-                                if (selectedCategory && selectedCategory !== 'CREATE_NEW_CATEGORY' && subcategory_data[selectedCategory]) {
-                                    // Enable subcategory dropdown
-                                    subcategoryDropdown.disabled = false;
-                                    
-                                    // Populate subcategory options
-                                    subcategory_data[selectedCategory].forEach(function(subcat) {
-                                        const option = document.createElement('option');
-                                        option.value = subcat.value;
-                                        option.textContent = subcat.label;
-                                        subcategoryDropdown.appendChild(option);
-                                    });
-                                } else {
-                                    // Disable subcategory dropdown
-                                    subcategoryDropdown.disabled = true;
-                                }
-                            });
-                            
-                            // Trigger change event if category is already selected
-                            if (categoryDropdown.value) {
-                                categoryDropdown.dispatchEvent(new Event('change'));
-                            }
-                        }
-                    });
-                }, 100);
-                
-                return "";
-            }
-            """,
-            Output('dropdown-setup-trigger', 'children'),
-            [Input('dropdown-setup-interval', 'n_intervals'),
+        # Pattern-matching callback for dropdown dependencies
+        @self.app.callback(
+            Output({'type': 'group-subcategory-dropdown', 'index': ALL}, 'options'),
+            Output({'type': 'group-subcategory-dropdown', 'index': ALL}, 'disabled'),
+            Output({'type': 'group-subcategory-dropdown', 'index': ALL}, 'value'),
+            [Input({'type': 'group-category-dropdown', 'index': ALL}, 'value'),
              Input('subcategory-lookup-data', 'children')]
         )
+        def update_subcategory_dropdowns(category_values, subcategory_data_json):
+            """Update subcategory dropdown options based on selected categories."""
+            if not subcategory_data_json:
+                # Return empty options for all dropdowns
+                num_dropdowns = len(category_values) if category_values else 1
+                return [[]] * num_dropdowns, [True] * num_dropdowns, [None] * num_dropdowns
+            
+            try:
+                subcategory_data = json.loads(subcategory_data_json)
+            except:
+                num_dropdowns = len(category_values) if category_values else 1
+                return [[]] * num_dropdowns, [True] * num_dropdowns, [None] * num_dropdowns
+            
+            # Process each category dropdown
+            all_options = []
+            all_disabled = []
+            all_values = []
+            
+            for category in category_values:
+                if category and category != 'CREATE_NEW_CATEGORY' and category in subcategory_data:
+                    # Category selected and has subcategories
+                    options = subcategory_data[category]
+                    disabled = False
+                    value = None  # Reset subcategory selection
+                else:
+                    # No category selected or no subcategories available
+                    options = []
+                    disabled = True
+                    value = None
+                
+                all_options.append(options)
+                all_disabled.append(disabled)
+                all_values.append(value)
+            
+            return all_options, all_disabled, all_values
     
     def create_category_pie_chart(self, transactions: List[Dict]) -> go.Figure:
         """Create category spending pie chart."""
@@ -996,7 +978,7 @@ class FinancialDashboard:
                 # Category selection
                 html.Td([
                     dcc.Dropdown(
-                        id=f'group-category-dropdown-{group_id}',
+                        id={'type': 'group-category-dropdown', 'index': group_id},
                         options=category_options,
                         value=suggested_cat,  # Pre-fill if suggestion available
                         placeholder="Select category...",
@@ -1007,7 +989,7 @@ class FinancialDashboard:
                 # Subcategory selection
                 html.Td([
                     dcc.Dropdown(
-                        id=f'group-subcategory-dropdown-{group_id}',
+                        id={'type': 'group-subcategory-dropdown', 'index': group_id},
                         options=subcategory_lookup.get(suggested_cat, []) if suggested_cat else [],
                         value=suggested_subcat if suggested_cat and suggested_subcat else None,
                         placeholder="Select subcategory...",
@@ -1089,10 +1071,6 @@ class FinancialDashboard:
             ], color="info"),
             
             subcategory_data,  # Hidden data for callbacks
-            
-            # Components for dropdown setup callback
-            html.Div(id='dropdown-setup-trigger', style={'display': 'none'}),
-            dcc.Interval(id='dropdown-setup-interval', interval=1000, max_intervals=1),
             
             html.Div([
                 review_table
