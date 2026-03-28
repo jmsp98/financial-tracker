@@ -356,6 +356,59 @@ class FinancialDashboard:
                 ], color="danger", duration=5000)
                 
                 return feedback, no_update
+        
+        # Callback for retrain ML model button
+        @self.app.callback(
+            Output('bulk-action-feedback', 'children'),
+            [Input('retrain-model-btn', 'n_clicks')],
+            prevent_initial_call=True
+        )
+        def handle_retrain_model_button(n_clicks):
+            """Handle retrain ML model button clicks."""
+            if not n_clicks:
+                return ""
+            
+            try:
+                from .user_feedback import UserFeedbackManager
+                
+                # Initialize feedback manager
+                feedback_manager = UserFeedbackManager()
+                
+                # Check if we have any user corrections to train on
+                if not os.path.exists(feedback_manager.feedback_file):
+                    return dbc.Alert([
+                        html.Strong("⚠️ No Training Data"), 
+                        " No user corrections found. Apply some category changes first, then retrain the model."
+                    ], color="warning", duration=8000)
+                
+                # Retrain ML model
+                training_results = feedback_manager.retrain_ml_model()
+                
+                if 'error' in training_results:
+                    return dbc.Alert([
+                        html.Strong("❌ Training Failed"), 
+                        f" {training_results['error']}"
+                    ], color="danger", duration=8000)
+                
+                # Success message with training stats
+                accuracy = training_results.get('test_accuracy', 0)
+                train_size = training_results.get('train_size', 0)
+                
+                return dbc.Alert([
+                    html.Strong("🎉 Model Retrained Successfully!"), 
+                    html.Br(),
+                    f"Trained on {train_size} transactions",
+                    html.Br(),
+                    f"New model accuracy: {accuracy:.1%}",
+                    html.Br(),
+                    html.Small("The model will now provide better categorization suggestions.", className="text-muted")
+                ], color="success", duration=10000)
+                
+            except Exception as e:
+                return dbc.Alert([
+                    html.Strong("❌ Unexpected Error"), 
+                    f" Failed to retrain model: {str(e)}"
+                ], color="danger", duration=8000)
     
     def create_category_pie_chart(self, transactions: List[Dict]) -> go.Figure:
         """Create category spending pie chart."""
