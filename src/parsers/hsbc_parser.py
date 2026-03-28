@@ -434,10 +434,15 @@ class HSBCParser(BaseBankParser):
             if clean_line.strip():
                 description_parts.append(clean_line.strip())
         
-        # Build clean description
-        description = ' '.join(description_parts).strip()
-        if not description:
-            description = txn_text.strip()
+        # Build clean description and extract location
+        raw_description = ' '.join(description_parts).strip()
+        if not raw_description:
+            raw_description = txn_text.strip()
+        
+        # Clean the description by removing payment method prefix
+        clean_description, extracted_location = self._clean_description_and_extract_location(
+            raw_description, payment_method
+        )
         
         # Determine transaction amount and type
         transaction_amount = 0.0
@@ -452,16 +457,16 @@ class HSBCParser(BaseBankParser):
         
         if base_amount is None:
             # No amount found - might be a balance line or error
-            if 'BALANCE BROUGHT FORWARD' in description or 'BALANCE CARRIED FORWARD' in description:
+            if 'BALANCE BROUGHT FORWARD' in clean_description or 'BALANCE CARRIED FORWARD' in clean_description:
                 transaction_amount = 0.0
                 transaction_type = 'balance'
             else:
-                logger.warning(f"No amount found for transaction: {description}")
+                logger.warning(f"No amount found for transaction: {clean_description}")
                 return None
         else:
             # Determine if this should be credit (positive) or debit (negative)
             # based on payment method and description context
-            is_credit = self._is_credit_transaction(payment_method, description)
+            is_credit = self._is_credit_transaction(payment_method, clean_description)
             
             if is_credit:
                 transaction_amount = base_amount
@@ -470,23 +475,48 @@ class HSBCParser(BaseBankParser):
                 transaction_amount = -base_amount
                 transaction_type = 'debit'
         
-        # Extract merchant and location
-        merchant, location = self.extract_merchant_and_location(description)
+        # Extract merchant and location from clean description
+        merchant, location = self.extract_merchant_and_location(clean_description)
         
-        # Skip balance-only lines 
+        # Use extracted location if we found one, otherwise use the merchant extraction
+        final_location = extracted_location if extracted_location else location
+        
+            # Skip balance-only lines 
         if transaction_amount == 0.0 and transaction_type != 'balance':
             return None
         
+        # Skip if this is clearly footer content
+        footer_indicators = [
+            'Information about the Financial Services',
+            'Contact tel',
+            'www.hsbc.co.uk', 
+            'Registered in England',
+            'Authorised by the Prudential',
+            'Customer information:',
+            'HSBC UK Bank plc',
+            'Centenary Square',
+            'Your Statement Account Name',
+            'Financial Services Compensation',
+            'about the compensation provided by the FSCS',
+            'refer to the FSCS website',
+            'Scheme Information Sheet'
+        ]
+        
+        for indicator in footer_indicators:
+            if indicator in clean_description:
+                logger.debug(f"Skipping footer content: {clean_description[:100]}...")
+                return None
+        
         return Transaction(
             date=date,
-            description=description,
+            description=clean_description,
             amount=transaction_amount,
             balance=balance,
             transaction_type=transaction_type,
             payment_method=payment_method,
             merchant=merchant,
-            location=location,
-            raw_description=txn_text
+            location=final_location,
+            raw_description=raw_description
         )
     
     def _extract_payment_method(self, line: str) -> Optional[str]:
@@ -605,3 +635,68 @@ class HSBCParser(BaseBankParser):
         clean_line = re.sub(r'\s+', ' ', clean_line).strip()
         
         return clean_line
+    
+    def _clean_description_and_extract_location(self, description: str, payment_method: Optional[str]) -> Tuple[str, Optional[str]]:
+        """
+        Clean description by removing payment method prefix and extract location.
+        
+        Args:
+            description: Raw description with payment method prefix
+            payment_method: Already extracted payment method
+            
+        Returns:
+            Tuple of (clean_description, extracted_location)
+        """
+        clean_desc = description
+        
+        # Remove payment method prefixes from description
+        payment_prefixes = ['VIS ', '))) ', 'DD ', 'CR ', 'TFR ', 'BP ']
+        for prefix in payment_prefixes:
+            if clean_desc.startswith(prefix):
+                clean_desc = clean_desc[len(prefix):]
+                break
+        
+        # Extract location from the end of description
+        # Look for known UK cities and locations at the end
+        location = None
+        
+        # Known UK cities and common locations (more conservative approach)
+        known_locations = [
+            'LONDON', 'OXFORD', 'BIRMINGHAM', 'MANCHESTER', 'BRISTOL', 'CAMBRIDGE', 
+            'EDINBURGH', 'GLASGOW', 'CARDIFF', 'LIVERPOOL', 'LEEDS', 'SHEFFIELD',
+            'NEWCASTLE', 'NOTTINGHAM', 'BRIGHTON', 'BATH', 'YORK', 'CHESTER',
+            'CANTERBURY', 'WINCHESTER', 'STRATFORD', 'WINDSOR', 'RICHMOND',
+            'BARNES', 'HOOVER', 'UXBRIDGE', 'WATFORD', 'BEACONSFIELD',
+            'WALLINGFORD', 'BURFORD', 'FARINGDON', 'SEVENOAKS', 'CAMBER',
+            'RYE', 'KENDAL', 'CHERWELL', 'SAXMUNDHAM', 'PADDINGTON'
+        ]
+        
+        # Look for known locations at the end of the string
+        words = clean_desc.split()
+        if len(words) >= 2:
+            # Check last word
+            if words[-1] in known_locations:
+                location = words[-1]
+                clean_desc = ' '.join(words[:-1])
+            # Check last two words
+            elif len(words) >= 3 and ' '.join(words[-2:]) in [l for l in known_locations if ' ' in l]:
+                location = ' '.join(words[-2:])
+                clean_desc = ' '.join(words[:-2])
+            # Check for city patterns like "LONDON W" or "SOUTH MIMMS"
+            elif len(words) >= 2:
+                potential_location = ' '.join(words[-2:])
+                for known_loc in known_locations:
+                    if known_loc in potential_location:
+                        location = potential_location
+                        clean_desc = ' '.join(words[:-2])
+                        break
+        
+        # Clean up the final description
+        clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
+        
+        # Don't return empty descriptions
+        if not clean_desc and location:
+            clean_desc = location
+            location = None
+        
+        return clean_desc, location

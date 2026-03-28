@@ -4,7 +4,7 @@ No API costs or external dependencies required.
 """
 
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 import logging
 
@@ -25,26 +25,40 @@ class RuleBasedCategorizer:
         self._compile_patterns()
     
     def _compile_patterns(self):
-        """Pre-compile regex patterns for better performance."""
+        """Pre-compile regex patterns for better performance with hierarchical categories."""
         self.category_patterns = {}
+        self.subcategory_patterns = {}
         
         for category, category_data in self.categories.items():
-            keywords = category_data.get('keywords', [])
-            if keywords:
-                # Create a regex pattern that matches any of the keywords
-                # Make it case-insensitive and match word boundaries
-                pattern_parts = []
-                for keyword in keywords:
-                    # Escape special regex characters - use partial matching instead of word boundaries
-                    # This allows "sainsbury" to match "SAINSBURYS", "tesco" to match "TESCO STORES", etc.
-                    escaped_keyword = re.escape(keyword.lower())
-                    pattern_parts.append(escaped_keyword)
+            # Handle hierarchical structure with subcategories
+            if 'subcategories' in category_data:
+                self.subcategory_patterns[category] = {}
                 
-                if pattern_parts:
-                    pattern = "|".join(pattern_parts)
-                    self.category_patterns[category] = re.compile(pattern, re.IGNORECASE)
+                for subcategory, subcategory_data in category_data['subcategories'].items():
+                    keywords = subcategory_data.get('keywords', [])
+                    if keywords:
+                        pattern_parts = []
+                        for keyword in keywords:
+                            escaped_keyword = re.escape(keyword.lower())
+                            pattern_parts.append(escaped_keyword)
+                        
+                        if pattern_parts:
+                            pattern = "|".join(pattern_parts)
+                            self.subcategory_patterns[category][subcategory] = re.compile(pattern, re.IGNORECASE)
+            else:
+                # Legacy flat structure (for backwards compatibility)
+                keywords = category_data.get('keywords', [])
+                if keywords:
+                    pattern_parts = []
+                    for keyword in keywords:
+                        escaped_keyword = re.escape(keyword.lower())
+                        pattern_parts.append(escaped_keyword)
+                    
+                    if pattern_parts:
+                        pattern = "|".join(pattern_parts)
+                        self.category_patterns[category] = re.compile(pattern, re.IGNORECASE)
     
-    def categorize_transaction(self, transaction: Transaction) -> str:
+    def categorize_transaction(self, transaction: Transaction) -> Tuple[str, Optional[str]]:
         """
         Categorize a single transaction based on its description.
         
@@ -52,45 +66,59 @@ class RuleBasedCategorizer:
             transaction: Transaction object to categorize
             
         Returns:
-            Category name (e.g., 'groceries', 'dining', 'other')
+            Tuple of (category, subcategory) e.g., ('groceries', 'tesco') or ('other', None)
         """
         description = transaction.description.lower()
         
         # Check for income first (positive amounts or specific keywords)
         if transaction.amount > 0:
-            if 'income' in self.category_patterns:
-                if self.category_patterns['income'].search(description):
-                    return 'income'
-            # If no income keywords match but amount is positive, still might be income
-            income_indicators = ['deposit', 'payroll', 'salary', 'refund', 'interest']
-            if any(indicator in description for indicator in income_indicators):
-                return 'income'
+            if 'income' in self.subcategory_patterns:
+                for subcategory, pattern in self.subcategory_patterns['income'].items():
+                    if pattern.search(description):
+                        return 'income', subcategory
+                # If no subcategory matches but we have income patterns, return general income
+                return 'income', 'transfers'
+            
+            # Fallback income detection
+            income_indicators = ['deposit', 'payroll', 'salary', 'refund', 'interest', 'transfer', 'rent received']
+            for indicator in income_indicators:
+                if indicator in description:
+                    return 'income', 'transfers'
         
-        # Check other categories for expenses (negative amounts)
+        # Check hierarchical categories for expenses (negative amounts)
+        for category in self.subcategory_patterns:
+            if category == 'income':  # Skip income, already handled
+                continue
+                
+            for subcategory, pattern in self.subcategory_patterns[category].items():
+                if pattern.search(description):
+                    return category, subcategory
+        
+        # Check legacy flat categories (backwards compatibility)
         for category, pattern in self.category_patterns.items():
             if category == 'income':  # Skip income, already handled
                 continue
                 
             if pattern.search(description):
-                return category
+                return category, None
         
-        # Default to 'other' if no match found
-        return 'other'
+        # Default to 'other' with 'unknown' subcategory if no match found
+        return 'other', 'unknown'
     
     def categorize_transactions(self, transactions: List[Transaction]) -> List[Dict]:
         """
-        Categorize a list of transactions.
+        Categorize a list of transactions with hierarchical categories.
         
         Args:
             transactions: List of Transaction objects
             
         Returns:
-            List of transaction dictionaries with categories
+            List of transaction dictionaries with categories and subcategories
         """
         categorized_transactions = []
         
         for transaction in transactions:
-            category = self.categorize_transaction(transaction)
+            category, subcategory = self.categorize_transaction(transaction)
             
             transaction_dict = {
                 'date': transaction.date,
@@ -98,9 +126,19 @@ class RuleBasedCategorizer:
                 'amount': transaction.amount,
                 'balance': transaction.balance,
                 'type': transaction.transaction_type,
-                'category': category
+                'category': category,
+                'subcategory': subcategory,
+                'categorization_method': 'rules'
             }
             
+            # Add optional fields if they exist
+            if hasattr(transaction, 'payment_method') and transaction.payment_method:
+                transaction_dict['payment_method'] = transaction.payment_method
+            if hasattr(transaction, 'merchant') and transaction.merchant:
+                transaction_dict['merchant'] = transaction.merchant  
+            if hasattr(transaction, 'location') and transaction.location:
+                transaction_dict['location'] = transaction.location
+                
             categorized_transactions.append(transaction_dict)
         
         return categorized_transactions
