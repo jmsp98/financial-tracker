@@ -11,37 +11,40 @@ data:
 categories:
   # Income sources
   income:
-    keywords: ["salary", "payroll", "bonus", "interest", "dividend", "refund", "deposit", "direct deposit"]
+    keywords: ["salary", "payroll", "bonus", "interest", "dividend", "refund", "deposit", "direct deposit", "employer_co", "income_source", "credit", "transfer", "internet transfer"]
     
-  # Food & Dining
+  # Food & Dining (UK-focused)
   groceries:
-    keywords: ["grocery", "supermarket", "whole foods", "safeway", "trader joe", "kroger", "walmart", "costco", "market"]
+    keywords: ["tesco", "sainsbury", "asda", "morrisons", "aldi", "lidl", "co-op", "waitrose", "iceland", "marks spencer", "m&s food", "grocery", "supermarket", "food"]
   
   dining:
-    keywords: ["restaurant", "cafe", "coffee", "starbucks", "mcdonald", "burger", "pizza", "delivery", "uber eats", "doordash", "grubhub"]
+    keywords: ["costa", "pret", "greggs", "cafe", "restaurant", "coffee", "mcdonald", "burger king", "kfc", "pizza", "nando", "wetherspoon", "pub", "deliveroo", "just eat", "uber eats", "takeaway", "dining"]
   
-  # Transportation
+  # Transportation (UK-focused)
   transportation:
-    keywords: ["gas", "fuel", "shell", "exxon", "bp", "chevron", "uber", "lyft", "taxi", "parking", "metro", "transit", "bus"]
+    keywords: ["shell", "bp", "esso", "petrol", "fuel", "tfl", "transport for london", "oyster", "uber", "taxi", "parking", "train", "rail", "bus", "underground", "tube", "national express"]
   
-  # Bills & Utilities
+  # Bills & Utilities (UK-focused)
+  utilities:
+    keywords: ["british gas", "eon", "edf", "octopus energy", "bulb", "shell energy", "scottish power", "thames water", "severn trent", "anglian water", "electricity", "gas bill", "water"]
+  
   bills:
-    keywords: ["electric", "electricity", "water", "gas bill", "internet", "comcast", "verizon", "at&t", "phone", "wireless", "cable"]
+    keywords: ["bt", "sky", "virgin media", "ee", "o2", "vodafone", "three", "phone", "mobile", "broadband", "internet", "tv licence", "council tax"]
   
   housing:
-    keywords: ["rent", "mortgage", "property", "insurance", "hoa", "maintenance"]
+    keywords: ["rent", "mortgage", "property", "insurance", "service charge", "ground rent", "estate agent", "letting", "housing"]
   
-  # Shopping
+  # Shopping (UK-focused)  
   shopping:
-    keywords: ["amazon", "target", "best buy", "walmart", "clothing", "department", "mall", "online"]
+    keywords: ["amazon", "argos", "john lewis", "currys", "next", "h&m", "zara", "primark", "boots", "superdrug", "shopping", "online", "retail", "clothing", "department"]
   
-  # Entertainment
+  # Entertainment (UK-focused)
   entertainment:
-    keywords: ["movie", "theater", "netflix", "spotify", "gaming", "concert", "ticket", "streaming"]
+    keywords: ["netflix", "spotify", "amazon prime", "disney", "bbc iplayer", "cinema", "odeon", "vue", "cineworld", "theater", "theatre", "music", "streaming", "gaming", "entertainment"]
   
-  # Healthcare
+  # Healthcare (UK-focused)
   healthcare:
-    keywords: ["medical", "doctor", "pharmacy", "cvs", "walgreen", "hospital", "dental", "vision"]
+    keywords: ["boots", "superdrug", "pharmacy", "nhs", "private healthcare", "bupa", "medical", "dental", "optician", "specsavers", "vision express", "hospital"]
   
   # Banking & Finance
   banking:
@@ -59,22 +62,25 @@ dashboard:
   
 # Processing settings  
 processing:
-  # Date formats to try when parsing transactions
+  # Date formats to try when parsing transactions (UK-focused)
   date_formats: 
-    - "%m/%d/%Y"
-    - "%m-%d-%Y"  
-    - "%Y-%m-%d"
-    - "%m/%d/%y"
-    - "%m-%d-%y"
+    - "%d/%m/%Y"    # 31/12/2025 (UK standard)
+    - "%d-%m-%Y"    # 31-12-2025
+    - "%d %b %Y"    # 31 Dec 2025 (HSBC format)
+    - "%d %b %y"    # 31 Dec 25 (HSBC short format)
+    - "%Y-%m-%d"    # 2025-12-31 (ISO format)
+    - "%m/%d/%Y"    # 12/31/2025 (US format - fallback)
+    - "%m-%d-%Y"    # 12-31-2025 (US format - fallback)
   
-  # Currency symbols to handle
-  currency_symbols: ["$", "USD"]
+  # Currency symbols to handle (UK-focused)
+  currency_symbols: ["£", "GBP", "$", "USD"]
   
-  # Skip transactions with these descriptions (e.g., internal transfers)
-  skip_descriptions: ["TRANSFER", "PAYMENT THANK YOU"]
+  # Skip transactions with these descriptions (UK patterns)
+  skip_descriptions: ["BALANCE BROUGHT FORWARD", "BALANCE CARRIED FORWARD", "TRANSFER", "PAYMENT THANK YOU", "STATEMENT"]
 
-# Future ML settings (when you want to add machine learning)
+# ML categorization settings (hybrid system with rule-based fallback)
 ml:
-  enabled: false
-  model_path: "./models/categorizer.pkl"
-  confidence_threshold: 0.8
+  enabled: true
+  model_path: "./models/categorizer.pkl" 
+  confidence_threshold: 0.75
+  min_training_samples: 10  # Minimum samples per category for ML training
