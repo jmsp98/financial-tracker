@@ -320,9 +320,9 @@ class AdvancedHSBCParser(BaseBankParser):
         
         HSBC actual pattern:
         - Multiple transactions per day, only first transaction shows date
-        - Transaction 1: "05 Jan 26\nVIS\nTESCO STORES 2586" + "HOOVER 87.41"
-        - Transaction 2: ")))\nTESCO PFS 2066" + "BARNES 8.03" (same day, no date)
-        - Transaction 3: ")))\nSAMPLE_CLUB LT" + "LONDON 13.00" (same day, no date)
+        - Transaction 1: "05 Jan 26\nVIS\nSAMPLE MERCHANT 2586" + "LOCATION 87.41"
+        - Transaction 2: ")))\nSAMPLE STORE 2066" + "CITY 8.03" (same day, no date)
+        - Transaction 3: ")))\nSAMPLE LOCATION LT" + "CITY 13.00" (same day, no date)
         
         A new transaction starts when we see:
         1. Date pattern (e.g., "05 Jan 26") - always starts new transaction
@@ -389,8 +389,8 @@ class AdvancedHSBCParser(BaseBankParser):
         Parse a complete transaction from a group of rows.
         
         Standard HSBC 2-row pattern:
-        Row 1: "05 Jan 26\nVIS\nTESCO STORES 2586" | ""    | ""    | ""
-        Row 2: "OXFORD"                             | 87.41 | ""    | 1948.15
+        Row 1: "05 Jan 26\nVIS\nSAMPLE MERCHANT 2586" | ""    | ""    | ""
+        Row 2: "CITY"                             | 87.41 | ""    | 1948.15
         """
         if not group:
             return None
@@ -500,7 +500,7 @@ class AdvancedHSBCParser(BaseBankParser):
         """
         Parse date and payment method from first row.
         
-        Format: "05 Jan 26\nVIS\nTESCO STORES 2586"
+        Format: "05 Jan 26\nVIS\nSAMPLE MERCHANT 2586"
         """
         if not text or text.strip() == '':
             return None, None
@@ -531,8 +531,8 @@ class AdvancedHSBCParser(BaseBankParser):
         """
         Extract merchant description from the first row after removing date and payment method.
         
-        Input: "05 Jan 26\nVIS\nTESCO STORES 2586"
-        Output: "TESCO STORES 2586"
+        Input: "05 Jan 26\nVIS\nSAMPLE MERCHANT 2586"
+        Output: "SAMPLE MERCHANT 2586"
         """
         # Remove the date part
         date_match = re.match(r'(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2})', text)
@@ -559,8 +559,8 @@ class AdvancedHSBCParser(BaseBankParser):
         Parse date, description, and payment method from the first column.
         
         Format examples:
-        "05 Feb VIS TESCO STORES 2586 HOOVER"
-        "26   DD-AccountHolder SAMPLE_LOCATION"
+        "05 Feb VIS SAMPLE MERCHANT 2586 CITY"
+        "26   DD-AccountHolder SAMPLE ORGANIZATION"
         "    CR REFUND FROM MERCHANT"
         """
         if not text or text.strip() == '':

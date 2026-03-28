@@ -19,7 +19,7 @@ def create_large_synthetic_statement():
     
     # Realistic transaction patterns
     templates = [
-        "VIS TESCO STORES 1234 LONDON {:.2f}",
+        "VIS SAMPLE STORE 1234 CITY {:.2f}",
         "))) COSTA COFFEE LONDON {:.2f}",
         "DD BRITISH GAS 123456 {:.2f}",
         "VIS AMAZON.CO.UK LONDON {:.2f}",
@@ -30,7 +30,7 @@ def create_large_synthetic_statement():
     ]
     
     amounts_by_type = {
-        "VIS TESCO": (15.50, 85.50),
+        "VIS SAMPLE": (15.50, 85.50),
         "))) COSTA": (3.50, 6.50),
         "DD BRITISH": (89.45, 150.00),
         "VIS AMAZON": (19.99, 299.99),

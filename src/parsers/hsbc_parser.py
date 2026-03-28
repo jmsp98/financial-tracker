@@ -677,11 +677,11 @@ class HSBCParser(BaseBankParser):
         
         # Known UK cities and common locations (more conservative approach)
         known_locations = [
-            'LONDON', 'OXFORD', 'BIRMINGHAM', 'MANCHESTER', 'BRISTOL', 'CAMBRIDGE', 
+            'CITY', 'TOWN', 'LOCATION', 'CENTER', 'AREA', 'DISTRICT', 
             'EDINBURGH', 'GLASGOW', 'CARDIFF', 'LIVERPOOL', 'LEEDS', 'SHEFFIELD',
             'NEWCASTLE', 'NOTTINGHAM', 'BRIGHTON', 'BATH', 'YORK', 'CHESTER',
             'CANTERBURY', 'WINCHESTER', 'STRATFORD', 'WINDSOR', 'RICHMOND',
-            'BARNES', 'HOOVER', 'UXBRIDGE', 'WATFORD', 'BEACONSFIELD',
+            'NORTH', 'SOUTH', 'EAST', 'WEST', 'CENTRAL', 'UPPER',
             'WALLINGFORD', 'BURFORD', 'FARINGDON', 'SEVENOAKS', 'CAMBER',
             'RYE', 'KENDAL', 'CHERWELL', 'SAXMUNDHAM', 'PADDINGTON'
         ]

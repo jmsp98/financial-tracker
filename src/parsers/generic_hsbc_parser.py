@@ -258,7 +258,7 @@ class GenericHSBCParser(BaseBankParser):
             r'Paid\s+out\s+£Paid\s+in\s+£Balance\s+[\d,\.]+',  # Column header with balance
             # TARGETED contamination removal - only remove specific end patterns
             r'\s+SampleArea\s+London\s+H.*$',  # Remove " Sample City H" at END of line only
-            r'\s+Worcester\s+College.*$',  # Remove college info at END only
+            r'\s+Sample\s+Organization.*$',  # Remove organization info at END only
             r'\s+DD-\w+[A-Za-z]+.*$',  # Remove direct debit with account holder name at END only
             r'\s+BP\s+\w+\s+\w+\s+[\d,\.]+\s+[\d,\.]+$',  # Remove "BP name name amount amount" at end
             r'(\d{1,3}(?:,\d{3})*\.\d{2})\s+\1(?:\s|$)',  # Remove duplicate amounts like "4,151.94 4,151.94"
@@ -392,7 +392,7 @@ class GenericHSBCParser(BaseBankParser):
         contamination_patterns = [
             r'\s*\d{1,3}(?:,\d{3})*\.\d{2}\s+SampleArea\s+London\s+H.*',  # Remove balance + Sample City H
             r'\s*SampleArea\s+London\s+H.*',  # Remove just Sample City H if no balance before
-            r'\s*Worcester\s+College.*',  # Remove Sample_Location stuff
+            r'\s*Sample\s+Organization.*',  # Remove Sample Organization patterns
             r'\s*DD-\w+[A-Za-z]+.*',  # Remove DD-AccountHolder patterns  
             r'\s*BP\s+\w+\s+\w+\s+[\d,\.]+.*',  # Remove BP person name amount
             r'\s*\d{1,3}(?:,\d{3})*\.\d{2}\s*$',  # Remove trailing balance amounts

@@ -33,8 +33,8 @@ def test_uk_categorization():
     # Realistic UK transactions based on HSBC patterns
     uk_transactions = [
         # Groceries
-        ("VIS TESCO STORES 2586 LONDON", -25.50, "tesco"),
-        ("))) SAINSBURY'S LOCAL OXFORD", -15.75, "sainsburys"),
+        ("VIS SAMPLE STORE 2586 CITY", -25.50, "sample_store"),
+        ("))) SAMPLE STORE LOCAL CITY", -15.75, "sample_local"),
         ("VIS ASDA SUPERMARKET", -45.20, "asda"),
         ("MORRISONS DAILY", -8.50, "morrisons"),
         ("ALDI STORES LIMITED", -22.30, "aldi"),
@@ -66,7 +66,7 @@ def test_uk_categorization():
         ("VIS AMAZON.CO.UK", -29.99, "amazon"),
         ("VIS JOHN LEWIS", -89.50, "john lewis"),
         ("VIS NEXT RETAIL", -45.00, "next"),
-        ("VIS ZARA OXFORD", -65.00, "zara"),
+        ("VIS SAMPLE FASHION CITY", -65.00, "sample_fashion"),
         ("))) BOOTS UK", -15.50, "boots"),
         
         # Entertainment
@@ -208,7 +208,7 @@ if __name__ == '__main__':
     
     if success:
         print("✅ Financial tracker is optimized for UK banking patterns!")
-        print("   Categories updated for HSBC, Tesco, Costa, TfL, British Gas, etc.")
+        print("   Categories updated for HSBC, Sample Store, Sample Coffee, Transport, Sample Gas, etc.")
     else:
         print("⚠️  Consider adding more UK merchant keywords to config.yaml")
     

@@ -29,7 +29,7 @@ def generate_large_synthetic_dataset():
     
     # Synthetic transactions covering multiple categories
     transaction_templates = [
-        ("VIS TESCO STORES {}", "Groceries", "debit", 15.50, 85.50),
+        ("VIS SAMPLE STORE {}", "Groceries", "debit", 15.50, 85.50),
         ("VIS SAINSBURY'S {}", "Groceries", "debit", 8.75, 45.25),
         ("))) COSTA COFFEE {}", "Dining", "debit", 3.50, 6.50),
         ("DD BRITISH GAS", "Utilities", "debit", 89.45, 150.00),

@@ -180,7 +180,7 @@ class BaseBankParser(ABC):
             return cleaned, None
         
         # Look for common location indicators
-        location_indicators = ['LONDON', 'OXFORD', 'BIRMINGHAM', 'MANCHESTER', 'BRISTOL', 'LEEDS']
+        location_indicators = ['CITY', 'TOWN', 'LOCATION', 'AREA', 'CENTER', 'DISTRICT']
         
         for i, part in enumerate(parts):
             if part.upper() in location_indicators:
