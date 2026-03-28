@@ -50,23 +50,30 @@ class FinancialDashboard:
         try:
             files = [f for f in os.listdir(categorized_path) if f.endswith('.json')]
             if files:
-                latest_file = max(files, key=lambda f: os.path.getctime(os.path.join(categorized_path, f)))
-                file_path = os.path.join(categorized_path, latest_file)
+                # Try to find the combined file first
+                if 'all_categorized_transactions.json' in files:
+                    file_path = os.path.join(categorized_path, 'all_categorized_transactions.json')
+                else:
+                    latest_file = max(files, key=lambda f: os.path.getctime(os.path.join(categorized_path, f)))
+                    file_path = os.path.join(categorized_path, latest_file)
                 
                 with open(file_path, 'r') as f:
                     data = json.load(f)
                     
                 # Convert date strings back to datetime objects
                 for transaction in data:
-                    transaction['date'] = datetime.fromisoformat(transaction['date'])
+                    if isinstance(transaction, dict) and 'date' in transaction:
+                        transaction['date'] = datetime.fromisoformat(transaction['date'])
                 
                 self.categorized_data = data
-                logger.info(f"Loaded {len(self.categorized_data)} transactions from {latest_file}")
+                logger.info(f"Loaded {len(self.categorized_data)} transactions from {os.path.basename(file_path)}")
             else:
                 logger.warning("No categorized data files found. Run processing and categorization first.")
                 
         except Exception as e:
             logger.error(f"Error loading data: {e}")
+            import traceback
+            traceback.print_exc()
     
     def setup_layout(self):
         """Setup the dashboard layout."""
@@ -404,7 +411,7 @@ class FinancialDashboard:
         debug = dashboard_config.get('debug', debug)
         
         logger.info(f"Starting dashboard at http://{host}:{port}")
-        self.app.run_server(host=host, port=port, debug=debug)
+        self.app.run(host=host, port=port, debug=debug)
 
 
 # Global dashboard instance

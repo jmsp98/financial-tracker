@@ -130,6 +130,13 @@ class TransactionParser:
         transactions = []
         lines = text.split('\n')
         
+        # Try HSBC format first (multi-line format)
+        hsbc_transactions = self.parse_hsbc_format(lines)
+        if hsbc_transactions:
+            transactions.extend(hsbc_transactions)
+            return transactions
+        
+        # Fallback to standard single-line patterns
         for line in lines:
             line = line.strip()
             if not line:
@@ -170,6 +177,190 @@ class TransactionParser:
         transactions.sort(key=lambda x: x.date)
         
         return transactions
+    
+    def parse_hsbc_format(self, lines: List[str]) -> List[Transaction]:
+        """
+        Parse HSBC statement format which has multi-line transactions.
+        
+        Args:
+            lines: List of text lines from PDF
+            
+        Returns:
+            List of Transaction objects
+        """
+        transactions = []
+        
+        # Find the start of transaction data
+        transaction_start = -1
+        for i, line in enumerate(lines):
+            if 'Payment type and details' in line or ('Date' in line and '£Paid out' in line):
+                transaction_start = i + 1
+                break
+        
+        if transaction_start == -1:
+            return []
+        
+        # Process transactions line by line
+        i = transaction_start
+        current_transaction = None
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Skip empty lines and section breaks
+            if not line or line in ['A', 'BALANCECARRIEDFORWARD', 'BALANCEBROUGHTFORWARD']:
+                i += 1
+                continue
+            
+            # Check if this line starts a new transaction (has a date pattern)
+            date_match = re.match(r'(\d{1,2}\s+\w{3}\s+\d{2})', line)
+            
+            if date_match:
+                # Save previous transaction if exists
+                if current_transaction:
+                    transactions.append(current_transaction)
+                
+                # Start new transaction
+                date_str = date_match.group(1)
+                date = self.parse_date_hsbc(date_str)
+                
+                if date:
+                    # Extract the rest of the line after the date
+                    remaining = line[len(date_str):].strip()
+                    
+                    # Look for amounts and balance at the end of this or subsequent lines
+                    description_parts = []
+                    balance = None
+                    paid_out = 0.0
+                    paid_in = 0.0
+                    
+                    # Check if amounts are on this line
+                    amounts_on_this_line = self.extract_amounts_from_line(remaining)
+                    if amounts_on_this_line:
+                        remaining, paid_out, paid_in, balance = amounts_on_this_line
+                    
+                    description_parts.append(remaining)
+                    
+                    # Look ahead for continuation lines and amounts
+                    j = i + 1
+                    while j < len(lines) and not re.match(r'\d{1,2}\s+\w{3}\s+\d{2}', lines[j].strip()):
+                        next_line = lines[j].strip()
+                        
+                        if not next_line or next_line in ['BALANCECARRIEDFORWARD', 'BALANCEBROUGHTFORWARD']:
+                            break
+                        
+                        # Check if this line has amounts
+                        amounts_on_next_line = self.extract_amounts_from_line(next_line)
+                        if amounts_on_next_line:
+                            next_line, paid_out, paid_in, balance = amounts_on_next_line
+                        
+                        if next_line:  # Only add non-empty descriptions
+                            description_parts.append(next_line)
+                        
+                        j += 1
+                    
+                    # Create transaction
+                    description = ' '.join(description_parts).strip()
+                    
+                    # Calculate net amount (paid_in is positive, paid_out is negative)
+                    amount = paid_in - paid_out
+                    
+                    current_transaction = Transaction(
+                        date=date,
+                        description=description,
+                        amount=amount,
+                        balance=balance,
+                        transaction_type='credit' if amount > 0 else 'debit'
+                    )
+                    
+                    i = j  # Skip to after the transaction
+                else:
+                    i += 1
+            else:
+                i += 1
+        
+        # Add the last transaction
+        if current_transaction:
+            transactions.append(current_transaction)
+        
+        return transactions
+    
+    def extract_amounts_from_line(self, line: str) -> Optional[Tuple[str, float, float, Optional[float]]]:
+        """
+        Extract amounts from a line, returning (remaining_text, paid_out, paid_in, balance).
+        
+        Args:
+            line: Line of text that may contain amounts
+            
+        Returns:
+            Tuple of (remaining_text, paid_out, paid_in, balance) or None if no amounts found
+        """
+        # Look for patterns like "87.41", "1,948.15" at the end of lines
+        amount_pattern = r'(.*?)\s+([\d,]+\.?\d*)\s*([\d,]+\.?\d*)?\s*([\d,]+\.?\d*)?$'
+        match = re.match(amount_pattern, line)
+        
+        if match:
+            remaining_text = match.group(1).strip()
+            amounts = [match.group(i) for i in range(2, 5) if match.group(i)]
+            
+            # Convert amounts to floats
+            float_amounts = []
+            for amount_str in amounts:
+                if amount_str:
+                    cleaned = re.sub(r'[,]', '', amount_str)
+                    try:
+                        float_amounts.append(float(cleaned))
+                    except ValueError:
+                        continue
+            
+            # Determine which amounts are paid_out, paid_in, and balance
+            if len(float_amounts) == 1:
+                # Could be paid_out or balance
+                # If remaining text suggests expense, treat as paid_out
+                if any(word in remaining_text.lower() for word in ['vis', 'dd', ')))', 'tesco', 'amazon']):
+                    return remaining_text, float_amounts[0], 0.0, None
+                else:
+                    # Likely balance
+                    return remaining_text, 0.0, 0.0, float_amounts[0]
+            elif len(float_amounts) == 2:
+                # First is likely paid_out, second is balance
+                return remaining_text, float_amounts[0], 0.0, float_amounts[1]
+            elif len(float_amounts) == 3:
+                # paid_out, paid_in, balance
+                return remaining_text, float_amounts[0], float_amounts[1], float_amounts[2]
+        
+        return None
+    
+    def parse_date_hsbc(self, date_str: str) -> Optional[datetime]:
+        """
+        Parse HSBC date format (e.g., "05 Jan 26").
+        
+        Args:
+            date_str: Date string in HSBC format
+            
+        Returns:
+            Parsed datetime or None if parsing fails
+        """
+        try:
+            # Handle format like "05 Jan 26" - convert to full year
+            parts = date_str.strip().split()
+            if len(parts) == 3:
+                day, month, year = parts
+                # Convert 2-digit year to 4-digit year
+                if len(year) == 2:
+                    year_int = int(year)
+                    # Assume 20xx for years 00-50, 19xx for 51-99
+                    if year_int <= 50:
+                        year = f"20{year}"
+                    else:
+                        year = f"19{year}"
+                
+                full_date_str = f"{day} {month} {year}"
+                return datetime.strptime(full_date_str, '%d %b %Y')
+        except Exception as e:
+            logger.warning(f"Could not parse HSBC date: {date_str}, Error: {e}")
+        
+        return None
     
     def parse_transactions_from_table(self, tables: List[List[List[str]]]) -> List[Transaction]:
         """
