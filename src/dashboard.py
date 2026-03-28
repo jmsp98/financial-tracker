@@ -435,6 +435,85 @@ class FinancialDashboard:
         
         return fig
     
+    def create_monthly_trends_chart(self, monthly_data: Dict) -> go.Figure:
+        """Create monthly income vs expenses trend chart."""
+        if not monthly_data:
+            fig = go.Figure()
+            fig.add_annotation(
+                text="No monthly data available",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, xanchor='center', yanchor='middle',
+                showarrow=False, font=dict(size=16)
+            )
+            return fig
+        
+        months = sorted(monthly_data.keys())
+        
+        # Extract income and expenses data
+        income_values = []
+        expense_values = []
+        
+        for month in months:
+            month_summary = monthly_data[month]
+            total_income = month_summary.get('total_income', 0)
+            total_expenses = abs(month_summary.get('total_expenses', 0))  # Make positive for chart
+            
+            income_values.append(total_income)
+            expense_values.append(total_expenses)
+        
+        fig = go.Figure()
+        
+        # Add income trace
+        fig.add_trace(go.Scatter(
+            x=months,
+            y=income_values,
+            mode='lines+markers',
+            name='Income',
+            line=dict(color='green', width=3),
+            marker=dict(size=8)
+        ))
+        
+        # Add expenses trace
+        fig.add_trace(go.Scatter(
+            x=months,
+            y=expense_values,
+            mode='lines+markers',
+            name='Expenses',
+            line=dict(color='red', width=3),
+            marker=dict(size=8)
+        ))
+        
+        # Add net income trace
+        net_values = [inc - exp for inc, exp in zip(income_values, expense_values)]
+        fig.add_trace(go.Scatter(
+            x=months,
+            y=net_values,
+            mode='lines+markers',
+            name='Net Income',
+            line=dict(color='blue', width=2, dash='dash'),
+            marker=dict(size=6)
+        ))
+        
+        fig.update_layout(
+            title="Monthly Income vs Expenses",
+            xaxis_title="Month",
+            yaxis_title="Amount (£)",
+            hovermode='x unified',
+            template='plotly_white',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+        
+        # Add zero line for reference
+        fig.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5)
+        
+        return fig
+    
     def create_transactions_table(self, transactions: List[Dict]) -> html.Table:
         """Create transactions table."""
         if not transactions:
