@@ -288,6 +288,100 @@ class FinancialDashboard:
             logger.error(f"Failed to apply correction: {e}")
             return False
     
+    def apply_bulk_categorization(self, description: str, new_category: str, new_subcategory: str) -> dict:
+        """
+        Apply categorization to all transactions with the same description.
+        Updates both the in-memory data and persistent storage.
+        
+        Args:
+            description: Transaction description to match
+            new_category: New category to assign  
+            new_subcategory: New subcategory to assign
+            
+        Returns:
+            Dictionary with update results
+        """
+        try:
+            updated_count = 0
+            
+            # Update in-memory categorized data
+            for transaction in self.categorized_data:
+                if transaction.get('description', '').strip() == description.strip():
+                    transaction['category'] = new_category
+                    transaction['subcategory'] = new_subcategory
+                    transaction['categorization_method'] = 'user_corrected'
+                    transaction['user_corrected'] = True
+                    transaction['correction_timestamp'] = datetime.now().isoformat()
+                    updated_count += 1
+            
+            # Update persistent storage
+            self._save_updated_categorized_data()
+            
+            # Update rule-based categorizer's description history
+            from .categorizer import RuleBasedCategorizer
+            categorizer = RuleBasedCategorizer()
+            categorizer.update_description_history(description, new_category, new_subcategory)
+            categorizer.save_description_history()
+            
+            logger.info(f"Bulk update: '{description}' -> {new_category} -> {new_subcategory} ({updated_count} transactions)")
+            
+            return {
+                'success': True,
+                'updated_count': updated_count,
+                'description': description,
+                'category': new_category,
+                'subcategory': new_subcategory
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed bulk categorization update: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'updated_count': 0
+            }
+    
+    def _save_updated_categorized_data(self):
+        """Save the updated categorized data to file."""
+        try:
+            import os
+            import json
+            
+            categorized_path = config.get('data.categorized', './data/categorized')
+            os.makedirs(categorized_path, exist_ok=True)
+            
+            # Save to the main categorized file
+            output_file = os.path.join(categorized_path, 'all_categorized_transactions.json')
+            with open(output_file, 'w') as f:
+                json.dump(self.categorized_data, f, indent=2, default=str)
+            
+            logger.info(f"Saved updated categorized data to {output_file}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save updated categorized data: {e}")
+    
+    def refresh_dashboard_data(self):
+        """Refresh the dashboard data without requiring a restart."""
+        try:
+            # Reload the categorized data
+            old_count = len(self.categorized_data)
+            self.load_data()
+            new_count = len(self.categorized_data)
+            
+            logger.info(f"Dashboard data refreshed: {old_count} -> {new_count} transactions")
+            
+            return {
+                'success': True,
+                'old_count': old_count,
+                'new_count': new_count
+            }
+        except Exception as e:
+            logger.error(f"Failed to refresh dashboard data: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
     def create_monthly_trends_chart(self, monthly_data: Dict) -> go.Figure:
         """Create monthly income vs expenses chart."""
         months = sorted(monthly_data.keys())
@@ -576,12 +670,19 @@ class FinancialDashboard:
         ])
     
     def create_review_other_tab(self, filtered_data):
-        """Create the enhanced review 'other' transactions tab with hierarchical categorization."""
+        """Create the enhanced review 'other' transactions tab with duplicate grouping."""
         # Filter for 'other' category transactions
         other_transactions = [t for t in filtered_data if t.get('category', '').lower() == 'other']
         
         if not other_transactions:
             return dbc.Alert("🎉 Great! No transactions are categorized as 'Other'. Your categorization system is working well!", color="success")
+        
+        # Group transactions by description to handle duplicates efficiently
+        from collections import defaultdict
+        desc_groups = defaultdict(list)
+        for txn in other_transactions:
+            desc = txn['description'].strip()
+            desc_groups[desc].append(txn)
         
         # Get available categories and subcategories from config
         categories = config.get_categories()
@@ -622,71 +723,156 @@ class FinancialDashboard:
         category_options = sorted([opt for opt in category_options if not opt['value'].startswith('CREATE')], key=lambda x: x['label']) + \
                           [opt for opt in category_options if opt['value'].startswith('CREATE')]
         
-        # Create transaction rows for review
+        # Check for existing similar categorizations in the dataset
+        def get_suggested_categorization(description):
+            """Check if similar description has been categorized before."""
+            desc_lower = description.lower().strip()
+            
+            # Check all transactions for similar descriptions
+            for txn in filtered_data:
+                if (txn.get('category', '').lower() != 'other' and 
+                    txn['description'].lower().strip() == desc_lower):
+                    return txn.get('category'), txn.get('subcategory')
+            
+            # Check for partial matches (keywords)
+            for txn in filtered_data:
+                if (txn.get('category', '').lower() != 'other'):
+                    txn_desc = txn['description'].lower().strip()
+                    # Simple keyword matching
+                    if (len(desc_lower) > 5 and desc_lower in txn_desc) or \
+                       (len(txn_desc) > 5 and txn_desc in desc_lower):
+                        return txn.get('category'), txn.get('subcategory')
+            
+            return None, None
+        
+        # Create grouped transaction rows for review
         transaction_rows = []
-        for i, transaction in enumerate(other_transactions[:20]):
-            date_str = transaction['date'].strftime('%Y-%m-%d') if hasattr(transaction['date'], 'strftime') else str(transaction['date'])
-            desc = transaction['description'][:50] + "..." if len(transaction['description']) > 50 else transaction['description']
-            amount = f"${transaction['amount']:.2f}"
-            amount_color = "text-danger" if transaction['amount'] < 0 else "text-success"
+        group_id = 0
+        
+        # Sort groups by frequency (most common duplicates first)
+        sorted_groups = sorted(desc_groups.items(), key=lambda x: len(x[1]), reverse=True)
+        
+        for description, txn_group in sorted_groups[:15]:  # Show top 15 groups
+            group_id += 1
+            count = len(txn_group)
+            sample_txn = txn_group[0]  # Use first transaction as representative
             
-            # Current categorization info
-            current_cat = transaction.get('category', 'other').title()
-            current_subcat = transaction.get('subcategory', 'unknown').title()
-            current_info = f"{current_cat} → {current_subcat}"
+            # Calculate total amount for this group
+            total_amount = sum(t['amount'] for t in txn_group)
+            amount_display = f"${total_amount:.2f}"
+            amount_color = "text-danger" if total_amount < 0 else "text-success"
             
+            # Get suggested categorization
+            suggested_cat, suggested_subcat = get_suggested_categorization(description)
+            
+            # Create display for transaction count and dates
+            dates = [t['date'] for t in txn_group]
+            if len(dates) > 1:
+                date_range = f"{min(dates)} to {max(dates)}"
+                count_display = f"{count} transactions"
+            else:
+                date_range = dates[0]
+                count_display = "1 transaction"
+            
+            # Description display (truncated)
+            desc_display = description[:40] + "..." if len(description) > 40 else description
+            
+            # Current categorization
+            current_cat = sample_txn.get('category', 'other').title()
+            current_subcat = sample_txn.get('subcategory', 'unknown').title()
+            
+            # Suggestion display
+            if suggested_cat:
+                suggestion_display = f"💡 {suggested_cat.replace('_', ' ').title()} → {suggested_subcat.replace('_', ' ').title() if suggested_subcat else 'Unknown'}"
+                suggestion_color = "text-success"
+            else:
+                suggestion_display = "💭 No similar transactions found"
+                suggestion_color = "text-muted"
+            
+            # Create row with grouping
             row = html.Tr([
-                html.Td(date_str, style={'font-size': '0.9em'}),
-                html.Td(desc, title=transaction['description'], style={'font-size': '0.9em'}),
-                html.Td(amount, className=amount_color, style={'font-weight': 'bold'}),
-                html.Td(current_info, style={'font-size': '0.8em', 'color': 'gray'}),
+                # Description and count
                 html.Td([
-                    dcc.Dropdown(
-                        id=f'category-dropdown-{i}',
-                        options=category_options,
-                        placeholder="Select category...",
-                        style={'minWidth': '160px', 'fontSize': '0.9em'}
-                    )
-                ]),
-                html.Td([
-                    dcc.Dropdown(
-                        id=f'subcategory-dropdown-{i}',
-                        options=[],  # Will be populated based on category selection
-                        placeholder="Select subcategory...",
-                        disabled=True,
-                        style={'minWidth': '160px', 'fontSize': '0.9em'}
-                    )
-                ]),
-                html.Td([
-                    dbc.Button("✓", id=f'apply-btn-{i}', size="sm", color="success", disabled=True)
-                ]),
+                    html.Div([
+                        html.Strong(desc_display, title=description),
+                        html.Br(),
+                        html.Small(count_display, className="text-muted"),
+                        html.Br(),
+                        html.Small(date_range, className="text-muted")
+                    ])
+                ], style={'width': '30%'}),
                 
-                # Hidden inputs for new category/subcategory creation
+                # Total amount
                 html.Td([
-                    dbc.Input(
-                        id=f'new-category-input-{i}',
-                        placeholder="New category name...",
-                        style={'display': 'none', 'fontSize': '0.9em'}
-                    )
-                ], style={'display': 'none'}),
+                    html.Strong(amount_display, className=amount_color),
+                    html.Br(),
+                    html.Small(f"({count} × avg {total_amount/count:.2f})" if count > 1 else "", className="text-muted")
+                ], style={'width': '12%'}),
+                
+                # Current categorization
                 html.Td([
-                    dbc.Input(
-                        id=f'new-subcategory-input-{i}',
-                        placeholder="New subcategory name...",
-                        style={'display': 'none', 'fontSize': '0.9em'}
+                    html.Div(f"{current_cat} → {current_subcat}", className="text-muted"),
+                    html.Div(suggestion_display, className=suggestion_color, style={'font-size': '0.85em'})
+                ], style={'width': '18%'}),
+                
+                # Category selection
+                html.Td([
+                    dcc.Dropdown(
+                        id=f'group-category-dropdown-{group_id}',
+                        options=category_options,
+                        value=suggested_cat,  # Pre-fill if suggestion available
+                        placeholder="Select category...",
+                        style={'minWidth': '140px', 'fontSize': '0.9em'}
                     )
-                ], style={'display': 'none'}),
+                ], style={'width': '15%'}),
+                
+                # Subcategory selection
+                html.Td([
+                    dcc.Dropdown(
+                        id=f'group-subcategory-dropdown-{group_id}',
+                        options=subcategory_lookup.get(suggested_cat, []) if suggested_cat else [],
+                        value=suggested_subcat if suggested_cat and suggested_subcat else None,
+                        placeholder="Select subcategory...",
+                        disabled=not suggested_cat,
+                        style={'minWidth': '140px', 'fontSize': '0.9em'}
+                    )
+                ], style={'width': '15%'}),
+                
+                # Apply button
+                html.Td([
+                    dbc.Button(
+                        f"Apply to {count}", 
+                        id=f'group-apply-btn-{group_id}', 
+                        size="sm", 
+                        color="primary" if count > 1 else "success",
+                        disabled=not (suggested_cat),  # Enable if suggestion available
+                        title=f"Apply categorization to all {count} transactions with this description"
+                    )
+                ], style={'width': '10%'}),
+                
+                # Hidden data for JavaScript access
+                html.Td([
+                    html.Div(
+                        json.dumps({
+                            'description': description,
+                            'transaction_ids': [t.get('id', i) for i, t in enumerate(txn_group)],
+                            'count': count
+                        }),
+                        id=f'group-data-{group_id}',
+                        style={'display': 'none'}
+                    )
+                ], style={'display': 'none'})
             ])
+            
             transaction_rows.append(row)
         
-        # Create enhanced table
+        # Enhanced table with grouping
         review_table = dbc.Table([
             html.Thead([
                 html.Tr([
-                    html.Th("Date", style={'width': '10%'}),
-                    html.Th("Description", style={'width': '25%'}),
-                    html.Th("Amount", style={'width': '10%'}),
-                    html.Th("Current", style={'width': '15%'}),
+                    html.Th("Description & Count", style={'width': '30%'}),
+                    html.Th("Total Amount", style={'width': '12%'}),
+                    html.Th("Current & Suggestions", style={'width': '18%'}),
                     html.Th("New Category", style={'width': '15%'}),
                     html.Th("New Subcategory", style={'width': '15%'}),
                     html.Th("Apply", style={'width': '10%'}),
@@ -702,17 +888,25 @@ class FinancialDashboard:
             style={'display': 'none'}
         )
         
+        # Summary statistics
+        total_other_count = len(other_transactions)
+        grouped_count = sum(len(group) for group in desc_groups.values())
+        duplicate_descriptions = sum(1 for group in desc_groups.values() if len(group) > 1)
+        
         return html.Div([
             dbc.Alert([
-                html.H4("🔍 Review 'Other' Transactions", className="alert-heading"),
+                html.H4("🔍 Smart Review - Grouped 'Other' Transactions", className="alert-heading"),
                 html.P([
-                    f"Found {len(other_transactions)} transactions categorized as 'Other'. ",
-                    "Select both category and subcategory for each transaction, or create new ones as needed."
+                    f"Found {total_other_count} transactions categorized as 'Other', grouped into {len(desc_groups)} unique descriptions. ",
+                    f"{duplicate_descriptions} descriptions appear multiple times - fix once, apply to all!"
                 ]),
                 html.Hr(),
                 html.P([
-                    "💡 ", html.Strong("Tip:"), " You can create new categories and subcategories by selecting the '➕ Create New...' options. ",
-                    "This helps improve future categorization accuracy."
+                    "💡 ", html.Strong("Smart Features:"), 
+                    " • Transactions grouped by identical description", html.Br(),
+                    " • 🔍 Suggestions based on similar transactions you've already categorized", html.Br(),
+                    " • 🚀 Apply categorization to multiple transactions at once", html.Br(),
+                    " • 📊 Most frequent duplicates shown first for maximum impact"
                 ], className="mb-0")
             ], color="info"),
             
@@ -724,15 +918,22 @@ class FinancialDashboard:
             
             html.Div(id='review-feedback-messages', className='mt-3'),
             
-            # Bulk actions
+            # Enhanced bulk actions
             html.Hr(),
             dbc.Row([
                 dbc.Col([
                     dbc.Button(
                         "📝 Apply All Selected Changes", 
-                        id='apply-all-btn', 
+                        id='apply-all-grouped-btn', 
                         color="primary", 
                         disabled=True,
+                        className="me-2"
+                    ),
+                    dbc.Button(
+                        "🎯 Auto-Apply All Suggestions", 
+                        id='auto-apply-suggestions-btn', 
+                        color="success", 
+                        outline=True,
                         className="me-2"
                     ),
                     dbc.Button(
@@ -745,7 +946,17 @@ class FinancialDashboard:
                 dbc.Col([
                     html.Div(id='bulk-action-feedback')
                 ], width='auto')
-            ], justify='between', align='center')
+            ], justify='between', align='center'),
+            
+            # Show remaining ungrouped transactions
+            html.Div([
+                html.Hr(),
+                html.H5(f"📋 Showing top {min(15, len(desc_groups))} description groups"),
+                html.P([
+                    f"Total impact: Fixing these groups will categorize {min(grouped_count, sum(len(group) for _, group in sorted_groups[:15]))} transactions. ",
+                    f"Remaining: {max(0, len(desc_groups) - 15)} more description groups available."
+                ], className="text-muted")
+            ])
         ])
     
     def create_all_transactions_tab(self, filtered_data):

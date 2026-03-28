@@ -16,13 +16,105 @@ logger = logging.getLogger(__name__)
 
 class RuleBasedCategorizer:
     """
-    Categorize transactions using keyword matching rules.
+    Categorize transactions using keyword matching rules with description history lookup.
     Completely free - no external API calls or token costs.
     """
     
-    def __init__(self):
+    def __init__(self, use_description_history: bool = True):
         self.categories = config.get_categories()
+        self.use_description_history = use_description_history
+        self.description_history = {}  # Maps description -> (category, subcategory)
         self._compile_patterns()
+        
+        if self.use_description_history:
+            self._load_description_history()
+    
+    def _load_description_history(self):
+        """Load description history from previously categorized transactions."""
+        try:
+            import os
+            categorized_path = config.get('data.categorized', './data/categorized')
+            history_file = os.path.join(categorized_path, 'all_categorized_transactions.json')
+            
+            if os.path.exists(history_file):
+                import json
+                with open(history_file, 'r') as f:
+                    transactions = json.load(f)
+                
+                for txn in transactions:
+                    desc = txn.get('description', '').strip()
+                    category = txn.get('category', '')
+                    subcategory = txn.get('subcategory', '')
+                    
+                    # Only save non-"other" categorizations
+                    if desc and category and category.lower() != 'other':
+                        self.description_history[desc] = (category, subcategory)
+                
+                logger.info(f"Loaded {len(self.description_history)} description categorizations from history")
+        except Exception as e:
+            logger.warning(f"Could not load description history: {e}")
+            self.description_history = {}
+    
+    def get_description_categorization(self, description: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Get categorization for a description from history.
+        
+        Args:
+            description: Transaction description
+            
+        Returns:
+            Tuple of (category, subcategory) or (None, None) if not found
+        """
+        if not self.use_description_history:
+            return None, None
+        
+        desc = description.strip()
+        
+        # Exact match first
+        if desc in self.description_history:
+            return self.description_history[desc]
+        
+        # Fuzzy matching for similar descriptions
+        desc_lower = desc.lower()
+        for hist_desc, (cat, subcat) in self.description_history.items():
+            hist_desc_lower = hist_desc.lower()
+            
+            # Check for substantial overlap (both ways)
+            if (len(desc_lower) > 5 and desc_lower in hist_desc_lower) or \
+               (len(hist_desc_lower) > 5 and hist_desc_lower in desc_lower):
+                return cat, subcat
+        
+        return None, None
+    
+    def update_description_history(self, description: str, category: str, subcategory: str):
+        """
+        Update description history with new categorization.
+        
+        Args:
+            description: Transaction description
+            category: Category name
+            subcategory: Subcategory name
+        """
+        if self.use_description_history:
+            desc = description.strip()
+            self.description_history[desc] = (category, subcategory)
+            logger.info(f"Updated description history: '{desc}' -> {category} -> {subcategory}")
+    
+    def save_description_history(self):
+        """Save description history to file for persistence."""
+        try:
+            import os
+            categorized_path = config.get('data.categorized', './data/categorized')
+            os.makedirs(categorized_path, exist_ok=True)
+            
+            history_file = os.path.join(categorized_path, 'description_history.json')
+            import json
+            with open(history_file, 'w') as f:
+                json.dump(self.description_history, f, indent=2)
+            
+            logger.info(f"Saved {len(self.description_history)} description categorizations to history")
+        except Exception as e:
+            logger.error(f"Could not save description history: {e}")
     
     def _compile_patterns(self):
         """Pre-compile regex patterns for better performance with hierarchical categories."""
@@ -61,6 +153,7 @@ class RuleBasedCategorizer:
     def categorize_transaction(self, transaction: Transaction) -> Tuple[str, Optional[str]]:
         """
         Categorize a single transaction based on its description.
+        Uses description history first, then falls back to keyword matching.
         
         Args:
             transaction: Transaction object to categorize
@@ -68,22 +161,38 @@ class RuleBasedCategorizer:
         Returns:
             Tuple of (category, subcategory) e.g., ('groceries', 'tesco') or ('other', None)
         """
-        description = transaction.description.lower()
+        description = transaction.description
+        
+        # First, check description history for exact or similar matches
+        if self.use_description_history:
+            hist_category, hist_subcategory = self.get_description_categorization(description)
+            if hist_category:
+                logger.debug(f"Found historical categorization for '{description}': {hist_category} -> {hist_subcategory}")
+                return hist_category, hist_subcategory
+        
+        # Fall back to keyword-based categorization
+        description_lower = description.lower()
         
         # Check for income first (positive amounts or specific keywords)
         if transaction.amount > 0:
             if 'income' in self.subcategory_patterns:
                 for subcategory, pattern in self.subcategory_patterns['income'].items():
-                    if pattern.search(description):
-                        return 'income', subcategory
+                    if pattern.search(description_lower):
+                        result = ('income', subcategory)
+                        self._maybe_update_history(description, result)
+                        return result
                 # If no subcategory matches but we have income patterns, return general income
-                return 'income', 'transfers'
+                result = ('income', 'transfers')
+                self._maybe_update_history(description, result)
+                return result
             
             # Fallback income detection
             income_indicators = ['deposit', 'payroll', 'salary', 'refund', 'interest', 'transfer', 'rent received']
             for indicator in income_indicators:
-                if indicator in description:
-                    return 'income', 'transfers'
+                if indicator in description_lower:
+                    result = ('income', 'transfers')
+                    self._maybe_update_history(description, result)
+                    return result
         
         # Check hierarchical categories for expenses (negative amounts)
         for category in self.subcategory_patterns:
@@ -91,19 +200,29 @@ class RuleBasedCategorizer:
                 continue
                 
             for subcategory, pattern in self.subcategory_patterns[category].items():
-                if pattern.search(description):
-                    return category, subcategory
+                if pattern.search(description_lower):
+                    result = (category, subcategory)
+                    self._maybe_update_history(description, result)
+                    return result
         
         # Check legacy flat categories (backwards compatibility)
         for category, pattern in self.category_patterns.items():
             if category == 'income':  # Skip income, already handled
                 continue
                 
-            if pattern.search(description):
-                return category, None
+            if pattern.search(description_lower):
+                result = (category, None)
+                self._maybe_update_history(description, result)
+                return result
         
         # Default to 'other' with 'unknown' subcategory if no match found
         return 'other', 'unknown'
+    
+    def _maybe_update_history(self, description: str, result: Tuple[str, Optional[str]]):
+        """Update description history if enabled and result is not 'other'."""
+        if self.use_description_history and result[0] != 'other':
+            category, subcategory = result
+            self.update_description_history(description, category, subcategory or 'unknown')
     
     def categorize_transactions(self, transactions: List[Transaction]) -> List[Dict]:
         """
