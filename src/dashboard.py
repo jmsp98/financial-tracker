@@ -568,7 +568,15 @@ class FinancialDashboard:
         if not transactions:
             return html.P("No transactions to display")
         
-        # Sort by date (most recent first)
+        # Ensure dates are datetime objects and sort by date (most recent first)
+        for txn in transactions:
+            if isinstance(txn['date'], str):
+                try:
+                    txn['date'] = datetime.fromisoformat(txn['date'])
+                except:
+                    # Fallback for any problematic date strings
+                    txn['date'] = datetime.strptime(txn['date'], '%Y-%m-%d %H:%M:%S')
+        
         sorted_transactions = sorted(transactions, key=lambda x: x['date'], reverse=True)
         
         header = html.Thead([
@@ -587,7 +595,7 @@ class FinancialDashboard:
             amount_str = f"${abs(amount):,.2f}"
             
             row = html.Tr([
-                html.Td(transaction['date'].strftime('%Y-%m-%d')),
+                html.Td(transaction['date'].strftime('%d %b %Y')),  # More readable: "04 Mar 2026"
                 html.Td(transaction['description'][:50] + "..." if len(transaction['description']) > 50 else transaction['description']),
                 html.Td(transaction['category'].title()),
                 html.Td(amount_str, className=f"{amount_class} text-end")
