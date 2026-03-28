@@ -632,21 +632,25 @@ class FinancialDashboard:
         
         return None
     
-    def create_transactions_table(self, transactions: List[Dict]) -> html.Table:
+    def create_transactions_table(self, transactions: List[Dict], sort_by_date: bool = True) -> html.Table:
         """Create transactions table."""
         if not transactions:
             return html.P("No transactions to display")
         
-        # Ensure dates are datetime objects and sort by date (most recent first)
-        for txn in transactions:
-            if isinstance(txn['date'], str):
-                try:
-                    txn['date'] = datetime.fromisoformat(txn['date'])
-                except:
-                    # Fallback for any problematic date strings
-                    txn['date'] = datetime.strptime(txn['date'], '%Y-%m-%d %H:%M:%S')
-        
-        sorted_transactions = sorted(transactions, key=lambda x: x['date'], reverse=True)
+        if sort_by_date:
+            # Ensure dates are datetime objects and sort by date (most recent first)
+            for txn in transactions:
+                if isinstance(txn['date'], str):
+                    try:
+                        txn['date'] = datetime.fromisoformat(txn['date'])
+                    except:
+                        # Fallback for any problematic date strings
+                        txn['date'] = datetime.strptime(txn['date'], '%Y-%m-%d %H:%M:%S')
+            
+            sorted_transactions = sorted(transactions, key=lambda x: x['date'], reverse=True)
+        else:
+            # Use transactions as-is (assume already sorted)
+            sorted_transactions = transactions
         
         header = html.Thead([
             html.Tr([
@@ -729,8 +733,18 @@ class FinancialDashboard:
         # Subcategory pie chart 
         subcategory_pie_fig = self.create_subcategory_pie_chart(filtered_data)
         
-        # Transactions table
-        transactions_table = self.create_transactions_table(filtered_data[:50])  # Show 50 most recent
+        # Transactions table - sort first, then take top 50 most recent
+        # Ensure dates are datetime objects for proper sorting
+        for txn in filtered_data:
+            if isinstance(txn['date'], str):
+                try:
+                    txn['date'] = datetime.fromisoformat(txn['date'])
+                except:
+                    # Fallback for any problematic date strings
+                    txn['date'] = datetime.strptime(txn['date'], '%Y-%m-%d %H:%M:%S')
+        
+        sorted_filtered_data = sorted(filtered_data, key=lambda x: x['date'], reverse=True)
+        transactions_table = self.create_transactions_table(sorted_filtered_data[:50], sort_by_date=False)  # Show 50 most recent
         
         return html.Div([
             # Charts
@@ -778,7 +792,7 @@ class FinancialDashboard:
                     dbc.Card([
                         dbc.CardHeader([
                             "📋 Recent Transactions",
-                            html.Small(f" ({len(filtered_data[:50])}/{len(filtered_data)} shown)", className="text-muted ms-2")
+                            html.Small(f" ({min(50, len(filtered_data))}/{len(filtered_data)} shown)", className="text-muted ms-2")
                         ]),
                         dbc.CardBody([
                             # Search/filter controls
