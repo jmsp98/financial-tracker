@@ -7,7 +7,7 @@ import sys
 import json
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Dict
 
 # Add src directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -18,8 +18,8 @@ from src.parsers import ParserFactory
 logger = logging.getLogger(__name__)
 
 
-def process_pdf_file(pdf_path: str, extractor: PDFExtractor) -> List[dict]:
-    """Process a single PDF file and return transactions."""
+def process_pdf_file(pdf_path: str, extractor: PDFExtractor) -> dict:
+    """Process a single PDF file and return transactions with currency info."""
     logger.info(f"Processing: {pdf_path}")
     
     try:
@@ -29,7 +29,11 @@ def process_pdf_file(pdf_path: str, extractor: PDFExtractor) -> List[dict]:
         
         if not text and not tables:
             logger.warning(f"No text or tables extracted from {pdf_path}")
-            return []
+            return {'transactions': [], 'currency': {'symbol': '£', 'iso_code': 'GBP', 'confidence': 'low', 'sources': ['default']}}
+        
+        # Detect currency from PDF text
+        currency_info = extractor.detect_currency_from_text(text)
+        logger.info(f"Detected currency: {currency_info}")
         
         # Create appropriate parser based on statement content
         parser = ParserFactory.create_parser(text)
@@ -47,7 +51,9 @@ def process_pdf_file(pdf_path: str, extractor: PDFExtractor) -> List[dict]:
                 'description': txn.description,
                 'amount': txn.amount,
                 'balance': txn.balance if txn.balance is not None else 0.0,
-                'type': txn.transaction_type
+                'type': txn.transaction_type,
+                'currency_symbol': currency_info['symbol'],  # Add detected currency
+                'currency_code': currency_info['iso_code']
             }
             
             # Add new fields if available
@@ -61,11 +67,17 @@ def process_pdf_file(pdf_path: str, extractor: PDFExtractor) -> List[dict]:
             transaction_dicts.append(transaction_dict)
         
         logger.info(f"Extracted {len(transaction_dicts)} transactions from {pdf_path}")
-        return transaction_dicts
+        return {
+            'transactions': transaction_dicts,
+            'currency': currency_info
+        }
         
     except Exception as e:
         logger.error(f"Error processing {pdf_path}: {e}")
-        return []
+        return {
+            'transactions': [], 
+            'currency': {'symbol': '£', 'iso_code': 'GBP', 'confidence': 'low', 'sources': ['error_fallback']}
+        }
 
 
 def main(input_dir: str, output_dir: str) -> bool:
@@ -101,26 +113,52 @@ def main(input_dir: str, output_dir: str) -> bool:
         
         # Process each PDF
         all_transactions = []
+        all_currency_info = []
         
         for pdf_file in pdf_files:
             pdf_path = os.path.join(input_dir, pdf_file)
-            transactions = process_pdf_file(pdf_path, extractor)
+            result = process_pdf_file(pdf_path, extractor)
             
-            if transactions:
-                # Save individual file results
+            if result['transactions']:
+                # Save individual file results (with currency info)
                 output_file = os.path.join(output_dir, f"{os.path.splitext(pdf_file)[0]}_transactions.json")
                 with open(output_file, 'w') as f:
-                    json.dump(transactions, f, indent=2)
+                    json.dump(result, f, indent=2)
                 
-                all_transactions.extend(transactions)
+                all_transactions.extend(result['transactions'])
+                all_currency_info.append({
+                    'file': pdf_file,
+                    'currency': result['currency']
+                })
         
         if all_transactions:
-            # Save combined results
+            # Determine primary currency (most confident detection)
+            primary_currency = {'symbol': '£', 'iso_code': 'GBP', 'confidence': 'low', 'sources': ['default']}
+            if all_currency_info:
+                # Find currency with highest confidence
+                high_confidence = [info for info in all_currency_info if info['currency']['confidence'] == 'high']
+                if high_confidence:
+                    primary_currency = high_confidence[0]['currency']
+                else:
+                    medium_confidence = [info for info in all_currency_info if info['currency']['confidence'] == 'medium']
+                    if medium_confidence:
+                        primary_currency = medium_confidence[0]['currency']
+            
+            # Save combined results with currency metadata
+            combined_data = {
+                'transactions': all_transactions,
+                'currency': primary_currency,
+                'currency_detection_details': all_currency_info,
+                'processed_files': len(pdf_files),
+                'total_transactions': len(all_transactions)
+            }
+            
             combined_file = os.path.join(output_dir, "all_transactions.json")
             with open(combined_file, 'w') as f:
-                json.dump(all_transactions, f, indent=2)
+                json.dump(combined_data, f, indent=2)
             
             logger.info(f"Successfully processed {len(pdf_files)} files with {len(all_transactions)} total transactions")
+            logger.info(f"Primary currency detected: {primary_currency['symbol']} ({primary_currency['iso_code']}) with {primary_currency['confidence']} confidence")
             logger.info(f"Results saved to: {output_dir}")
             return True
         else:

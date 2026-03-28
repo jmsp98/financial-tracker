@@ -38,12 +38,14 @@ class FinancialDashboard:
         )
         
         self.categorized_data = []
+        self.currency_symbol = '£'  # Default currency symbol
+        self.currency_code = 'GBP'  # Default currency code
         self.load_data()
         self.setup_layout()
         self.setup_callbacks()
     
     def load_data(self):
-        """Load categorized transaction data."""
+        """Load categorized transaction data and detect currency."""
         categorized_path = config.get('data.categorized', './data/categorized')
         
         # Look for the most recent categorized data file
@@ -59,14 +61,34 @@ class FinancialDashboard:
                 
                 with open(file_path, 'r') as f:
                     data = json.load(f)
-                    
+                
+                # Handle both old format (list of transactions) and new format (dict with metadata)
+                if isinstance(data, dict) and 'transactions' in data:
+                    # New format with currency information
+                    transactions = data['transactions']
+                    if 'currency' in data:
+                        currency_info = data['currency']
+                        self.currency_symbol = currency_info.get('symbol', '£')
+                        self.currency_code = currency_info.get('iso_code', 'GBP')
+                        logger.info(f"Loaded currency: {self.currency_symbol} ({self.currency_code})")
+                else:
+                    # Old format - just list of transactions
+                    transactions = data
+                    # Check if transactions have currency fields
+                    if transactions and isinstance(transactions[0], dict):
+                        if 'currency_symbol' in transactions[0]:
+                            self.currency_symbol = transactions[0]['currency_symbol']
+                        if 'currency_code' in transactions[0]:
+                            self.currency_code = transactions[0]['currency_code']
+                
                 # Convert date strings back to datetime objects
-                for transaction in data:
+                for transaction in transactions:
                     if isinstance(transaction, dict) and 'date' in transaction:
                         transaction['date'] = datetime.fromisoformat(transaction['date'])
                 
-                self.categorized_data = data
+                self.categorized_data = transactions
                 logger.info(f"Loaded {len(self.categorized_data)} transactions from {os.path.basename(file_path)}")
+                logger.info(f"Using currency: {self.currency_symbol} ({self.currency_code})")
             else:
                 logger.warning("No categorized data files found. Run processing and categorization first.")
                 
@@ -542,7 +564,7 @@ class FinancialDashboard:
         fig.update_layout(
             title="Monthly Income vs Expenses",
             xaxis_title="Month",
-            yaxis_title="Amount (£)",
+            yaxis_title=f"Amount ({self.currency_symbol})",
             hovermode='x unified',
             template='plotly_white',
             legend=dict(
@@ -782,7 +804,7 @@ class FinancialDashboard:
         for transaction in sorted_transactions:
             amount = transaction['amount']
             amount_class = "text-success fw-bold" if amount > 0 else "text-danger fw-bold"
-            amount_str = f"£{abs(amount):,.2f}"
+            amount_str = f"{self.currency_symbol}{abs(amount):,.2f}"
             
             # Enhanced category display with subcategory
             category = transaction.get('category', 'unknown').title()
@@ -985,7 +1007,7 @@ class FinancialDashboard:
             x=list(sorted_categories),
             y=list(sorted_amounts),
             title="Spending by Category",
-            labels={'x': 'Category', 'y': 'Total Amount (£)'},
+            labels={'x': 'Category', 'y': f'Total Amount ({self.currency_symbol})'},
             color=list(sorted_amounts),
             color_continuous_scale='viridis'
         )
@@ -1003,8 +1025,8 @@ class FinancialDashboard:
             title="Category"
         )
         category_fig.update_yaxes(
-            title="Amount (£)",
-            tickformat='£,.0f'
+            title=f"Amount ({self.currency_symbol})",
+            tickformat=f'{self.currency_symbol},.0f'
         )
         
         # Create subcategory charts for each category
@@ -1023,7 +1045,7 @@ class FinancialDashboard:
                     x=list(subcat_names),
                     y=list(subcat_amounts),
                     title=f"{category.replace('_', ' ').title()} - Subcategories",
-                    labels={'x': 'Subcategory', 'y': 'Amount (£)'},
+                    labels={'x': 'Subcategory', 'y': f'Amount ({self.currency_symbol})'},
                     color=list(subcat_amounts),
                     color_continuous_scale='plasma'
                 )
@@ -1040,8 +1062,8 @@ class FinancialDashboard:
                     title=""
                 )
                 subcat_fig.update_yaxes(
-                    title="£",
-                    tickformat='£,.0f'
+                    title=self.currency_symbol,
+                    tickformat=f'{self.currency_symbol},.0f'
                 )
                 
                 subcategory_charts.append(
