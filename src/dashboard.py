@@ -4,7 +4,7 @@ Interactive Dash dashboard for financial data visualization.
 
 try:
     import dash
-    from dash import dcc, html, Input, Output, callback, State, clientside_callback, ALL
+    from dash import dcc, html, Input, Output, callback, State, clientside_callback, ALL, MATCH
     import dash_bootstrap_components as dbc
     import plotly.express as px
     import plotly.graph_objects as go
@@ -228,49 +228,85 @@ class FinancialDashboard:
     def setup_review_callbacks(self):
         """Setup callbacks for the enhanced Review Other functionality."""
         
-        # Pattern-matching callback for dropdown dependencies
+        # Pattern-matching callback for dropdown dependencies  
         @self.app.callback(
-            Output({'type': 'group-subcategory-dropdown', 'index': ALL}, 'options'),
-            Output({'type': 'group-subcategory-dropdown', 'index': ALL}, 'disabled'),
-            Output({'type': 'group-subcategory-dropdown', 'index': ALL}, 'value'),
-            [Input({'type': 'group-category-dropdown', 'index': ALL}, 'value'),
-             Input('subcategory-lookup-data', 'children')]
+            Output({'type': 'group-subcategory-dropdown', 'index': MATCH}, 'options'),
+            Output({'type': 'group-subcategory-dropdown', 'index': MATCH}, 'disabled'),
+            Output({'type': 'group-subcategory-dropdown', 'index': MATCH}, 'value'),
+            [Input({'type': 'group-category-dropdown', 'index': MATCH}, 'value'),
+             Input('subcategory-lookup-data', 'children')],
+            prevent_initial_call=True
         )
-        def update_subcategory_dropdowns(category_values, subcategory_data_json):
-            """Update subcategory dropdown options based on selected categories."""
+        def update_subcategory_dropdown(category_value, subcategory_data_json):
+            """Update a specific subcategory dropdown based on its category selection."""
             if not subcategory_data_json:
-                # Return empty options for all dropdowns
-                num_dropdowns = len(category_values) if category_values else 1
-                return [[]] * num_dropdowns, [True] * num_dropdowns, [None] * num_dropdowns
+                return [], True, None
             
             try:
                 subcategory_data = json.loads(subcategory_data_json)
             except:
-                num_dropdowns = len(category_values) if category_values else 1
-                return [[]] * num_dropdowns, [True] * num_dropdowns, [None] * num_dropdowns
+                return [], True, None
             
-            # Process each category dropdown
-            all_options = []
-            all_disabled = []
-            all_values = []
+            if category_value and category_value != 'CREATE_NEW_CATEGORY' and category_value in subcategory_data:
+                # Category selected and has subcategories
+                options = subcategory_data[category_value]
+                disabled = False
+                value = None  # Reset subcategory selection when category changes
+            else:
+                # No category selected or no subcategories available
+                options = []
+                disabled = True
+                value = None
             
-            for category in category_values:
-                if category and category != 'CREATE_NEW_CATEGORY' and category in subcategory_data:
-                    # Category selected and has subcategories
-                    options = subcategory_data[category]
-                    disabled = False
-                    value = None  # Reset subcategory selection
-                else:
-                    # No category selected or no subcategories available
-                    options = []
-                    disabled = True
-                    value = None
-                
-                all_options.append(options)
-                all_disabled.append(disabled)
-                all_values.append(value)
+            return options, disabled, value
+        
+        # Callback for individual apply buttons
+        @self.app.callback(
+            Output('review-feedback-messages', 'children'),
+            [Input({'type': 'group-apply-btn', 'index': ALL}, 'n_clicks')],
+            [State({'type': 'group-category-dropdown', 'index': ALL}, 'value'),
+             State({'type': 'group-subcategory-dropdown', 'index': ALL}, 'value')],
+            prevent_initial_call=True
+        )
+        def handle_apply_button_clicks(n_clicks_list, category_values, subcategory_values):
+            """Handle apply button clicks for individual transaction groups."""
+            if not any(n_clicks_list) or not category_values:
+                return ""
             
-            return all_options, all_disabled, all_values
+            # Find which button was clicked
+            import dash
+            ctx = dash.callback_context
+            if not ctx.triggered:
+                return ""
+            
+            button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+            clicked_index = json.loads(button_id)['index']
+            
+            # Find the corresponding category and subcategory
+            clicked_category = None
+            clicked_subcategory = None
+            
+            for i, (cat, subcat) in enumerate(zip(category_values, subcategory_values)):
+                if i + 1 == clicked_index:  # group_id is 1-indexed
+                    clicked_category = cat
+                    clicked_subcategory = subcat
+                    break
+            
+            if not clicked_category:
+                return dbc.Alert("Please select a category first.", color="warning", duration=3000)
+            
+            # TODO: Implement actual transaction updating logic here
+            # For now, show a success message
+            
+            category_display = clicked_category.replace('_', ' ').title()
+            subcategory_display = clicked_subcategory.replace('_', ' ').title() if clicked_subcategory else 'General'
+            
+            return dbc.Alert([
+                html.Strong("✅ Applied!"), 
+                f" Categorized as {category_display} → {subcategory_display}. ",
+                html.Small("(Note: This is a demo - actual implementation would update the database)", 
+                          className="text-muted")
+            ], color="success", duration=5000)
     
     def create_category_pie_chart(self, transactions: List[Dict]) -> go.Figure:
         """Create category spending pie chart."""
@@ -545,51 +581,54 @@ class FinancialDashboard:
         # Check for food & drink patterns
         for keyword in food_keywords:
             if keyword in description_lower:
-                # Determine subcategory
+                # Determine subcategory based on actual config structure
                 if any(k in description_lower for k in ['cafe', 'coffee', 'coffe', 'starbucks', 'costa', 'pret']):
-                    return 'food_and_drink', 'cafes_coffee'
+                    return 'food_drink', 'cafe'
                 elif any(k in description_lower for k in ['college', 'university', 'magdalen', 'oxford', 'cambridge', 'campus']):
-                    return 'food_and_drink', 'restaurants_dining_out'
+                    return 'food_drink', 'restaurant'
                 elif any(k in description_lower for k in ['tesco', 'sainsbury', 'asda', 'morrisons', 'aldi', 'lidl']):
-                    return 'food_and_drink', 'groceries'
+                    return 'groceries', 'tesco' if 'tesco' in description_lower else 'other_grocery'
                 elif any(k in description_lower for k in ['restaurant', 'dining', 'takeaway', 'pizz', 'burger']):
-                    return 'food_and_drink', 'restaurants_dining_out'
+                    return 'food_drink', 'restaurant'
                 else:
-                    return 'food_and_drink', 'groceries'
+                    return 'groceries', 'other_grocery'
         
         # Check for transport patterns (only if not food)
         for keyword in transport_keywords:
             if keyword in description_lower:
                 if any(k in description_lower for k in ['petrol', 'fuel', 'diesel', 'bp', 'shell', 'esso']):
-                    return 'transport', 'fuel'
+                    return 'transportation', 'fuel'
                 elif any(k in description_lower for k in ['train', 'railway', 'bus', 'ticket']):
-                    return 'transport', 'public_transport'
+                    return 'transportation', 'public_transport'
                 elif any(k in description_lower for k in ['taxi', 'uber', 'lyft']):
-                    return 'transport', 'taxi_rideshare'
+                    return 'transportation', 'taxi'
                 else:
-                    return 'transport', 'other_transport'
+                    return 'transportation', 'other_transport'
         
         # Check for shopping patterns
         for keyword in shopping_keywords:
             if keyword in description_lower:
-                return 'shopping', 'general_retail'
+                if 'amazon' in description_lower:
+                    return 'shopping', 'amazon'
+                else:
+                    return 'shopping', 'other_retail'
         
         # Check for utilities patterns
         for keyword in utilities_keywords:
             if keyword in description_lower:
-                if any(k in description_lower for k in ['electric', 'gas', 'water', 'council tax']):
-                    return 'bills_and_utilities', 'utilities'
+                if any(k in description_lower for k in ['electric', 'gas', 'water']):
+                    return 'utilities', 'electricity'
                 elif any(k in description_lower for k in ['mobile', 'phone', 'vodafone', 'ee', 'o2']):
-                    return 'bills_and_utilities', 'mobile_phone'
+                    return 'utilities', 'mobile'
                 elif any(k in description_lower for k in ['internet', 'broadband', 'bt', 'sky', 'virgin']):
-                    return 'bills_and_utilities', 'internet_tv'
+                    return 'utilities', 'internet'
                 else:
-                    return 'bills_and_utilities', 'other_bills'
+                    return 'bills', 'services'
         
         # Check for healthcare patterns
         for keyword in healthcare_keywords:
             if keyword in description_lower:
-                return 'healthcare', 'medical_expenses'
+                return 'healthcare', 'medical'
         
         return None
     
@@ -1104,10 +1143,10 @@ class FinancialDashboard:
                 html.Td([
                     dbc.Button(
                         f"Apply to {count}", 
-                        id=f'group-apply-btn-{group_id}', 
+                        id={'type': 'group-apply-btn', 'index': group_id}, 
                         size="sm", 
                         color="primary" if count > 1 else "success",
-                        disabled=not (suggested_cat),  # Enable if suggestion available
+                        disabled=False,  # Always enable - let user decide
                         title=f"Apply categorization to all {count} transactions with this description"
                     )
                 ], style={'width': '10%'}),
