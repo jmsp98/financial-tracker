@@ -10,15 +10,15 @@ from datetime import datetime
 from typing import List
 
 # Add src directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.pdf_extractor import PDFExtractor
-from src.transaction_parser import TransactionParser
+from src.parsers import ParserFactory
 
 logger = logging.getLogger(__name__)
 
 
-def process_pdf_file(pdf_path: str, extractor: PDFExtractor, parser: TransactionParser) -> List[dict]:
+def process_pdf_file(pdf_path: str, extractor: PDFExtractor) -> List[dict]:
     """Process a single PDF file and return transactions."""
     logger.info(f"Processing: {pdf_path}")
     
@@ -31,25 +31,34 @@ def process_pdf_file(pdf_path: str, extractor: PDFExtractor, parser: Transaction
             logger.warning(f"No text or tables extracted from {pdf_path}")
             return []
         
-        # Parse transactions from text
-        transactions_from_text = parser.parse_transactions_from_text(text) if text else []
+        # Create appropriate parser based on statement content
+        parser = ParserFactory.create_parser(text)
+        bank_type = ParserFactory.detect_bank(text)
+        logger.info(f"Detected bank: {bank_type}")
         
-        # Parse transactions from tables
-        transactions_from_tables = parser.parse_transactions_from_table(tables) if tables else []
-        
-        # Combine transactions (prefer table data if available)
-        all_transactions = transactions_from_tables if transactions_from_tables else transactions_from_text
+        # Parse transactions
+        all_transactions = parser.parse_transactions(text)
         
         # Convert to dict format
         transaction_dicts = []
         for txn in all_transactions:
-            transaction_dicts.append({
+            transaction_dict = {
                 'date': txn.date.isoformat(),
                 'description': txn.description,
                 'amount': txn.amount,
-                'balance': txn.balance,
+                'balance': txn.balance if txn.balance is not None else 0.0,
                 'type': txn.transaction_type
-            })
+            }
+            
+            # Add new fields if available
+            if hasattr(txn, 'payment_method') and txn.payment_method:
+                transaction_dict['payment_method'] = txn.payment_method
+            if hasattr(txn, 'merchant') and txn.merchant:
+                transaction_dict['merchant'] = txn.merchant
+            if hasattr(txn, 'location') and txn.location:
+                transaction_dict['location'] = txn.location
+                
+            transaction_dicts.append(transaction_dict)
         
         logger.info(f"Extracted {len(transaction_dicts)} transactions from {pdf_path}")
         return transaction_dicts
@@ -87,16 +96,15 @@ def main(input_dir: str, output_dir: str) -> bool:
         
         logger.info(f"Found {len(pdf_files)} PDF files to process")
         
-        # Initialize processors
+        # Initialize extractor
         extractor = PDFExtractor()
-        parser = TransactionParser()
         
         # Process each PDF
         all_transactions = []
         
         for pdf_file in pdf_files:
             pdf_path = os.path.join(input_dir, pdf_file)
-            transactions = process_pdf_file(pdf_path, extractor, parser)
+            transactions = process_pdf_file(pdf_path, extractor)
             
             if transactions:
                 # Save individual file results
