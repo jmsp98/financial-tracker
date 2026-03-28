@@ -202,9 +202,9 @@ class FinancialDashboard:
             net_income = total_income - total_expenses
             
             # Format summary values
-            income_str = f"${total_income:,.2f}"
-            expenses_str = f"${total_expenses:,.2f}"
-            net_str = f"${net_income:,.2f}"
+            income_str = f"{self.currency_symbol}{total_income:,.2f}"
+            expenses_str = f"{self.currency_symbol}{total_expenses:,.2f}"
+            net_str = f"{self.currency_symbol}{net_income:,.2f}"
             net_color = "text-success" if net_income >= 0 else "text-danger"
             
             return (
@@ -548,7 +548,7 @@ class FinancialDashboard:
         fig.update_layout(
             title="Monthly Spending by Category",
             xaxis_title="Month",
-            yaxis_title="Amount ($)",
+            yaxis_title=f"Amount ({self.currency_symbol})",
             hovermode='x unified',
             template='plotly_white'
         )
@@ -1253,7 +1253,7 @@ class FinancialDashboard:
             
             # Calculate total amount for this group
             total_amount = sum(t['amount'] for t in txn_group)
-            amount_display = f"${total_amount:.2f}"
+            amount_display = f"{self.currency_symbol}{total_amount:.2f}"
             amount_color = "text-danger" if total_amount < 0 else "text-success"
             
             # Get suggested categorization

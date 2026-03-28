@@ -172,52 +172,34 @@ class FinancialAnalyzer:
             }
         }
     
-    def generate_insights(self, analysis_results: Dict[str, Any]) -> List[str]:
+    def generate_insights(self, analysis_results: Dict[str, Any], currency_symbol: str = '£') -> List[str]:
         """
-        Generate human-readable insights from analysis results.
+        Generate insights based on analysis results.
         
         Args:
-            analysis_results: Results from other analysis methods
+            analysis_results: Results from analyze_transactions
+            currency_symbol: Currency symbol to use in insights
             
         Returns:
             List of insight strings
         """
         insights = []
         
-        # Monthly analysis insights
-        if 'monthly' in analysis_results:
-            monthly_data = analysis_results['monthly']
-            months = list(monthly_data.keys())
-            
-            if len(months) >= 2:
-                # Compare latest two months
-                latest_month = max(months)
-                previous_month = sorted(months)[-2] if len(months) > 1 else None
-                
-                if previous_month:
-                    latest_expenses = monthly_data[latest_month]['total_expenses']
-                    previous_expenses = monthly_data[previous_month]['total_expenses']
-                    
-                    if latest_expenses > previous_expenses * 1.1:
-                        increase = ((latest_expenses - previous_expenses) / previous_expenses) * 100
-                        insights.append(f"Spending increased by {increase:.1f}% from {previous_month} to {latest_month}")
-                    elif latest_expenses < previous_expenses * 0.9:
-                        decrease = ((previous_expenses - latest_expenses) / previous_expenses) * 100
-                        insights.append(f"Spending decreased by {decrease:.1f}% from {previous_month} to {latest_month}")
-        
-        # Spending pattern insights
-        if 'patterns' in analysis_results:
+        try:
             patterns = analysis_results['patterns']
             
             # Top spending category
             if 'category_analysis' in patterns and patterns['category_analysis']['top_expense_categories']:
                 top_category, top_amount = patterns['category_analysis']['top_expense_categories'][0]
-                insights.append(f"Your highest expense category is {top_category.title()} (${top_amount:.2f} total)")
+                insights.append(f"Your highest expense category is {top_category.title()} ({currency_symbol}{top_amount:.2f} total)")
             
             # Monthly spending average
             if 'spending_trends' in patterns:
                 avg_monthly = patterns['spending_trends']['average_monthly_spending']
-                insights.append(f"Your average monthly spending is ${avg_monthly:.2f}")
+                insights.append(f"Your average monthly spending is {currency_symbol}{avg_monthly:.2f}")
+        
+        except Exception as e:
+            logger.warning(f"Error generating insights: {e}")
         
         return insights
     
