@@ -4,7 +4,7 @@ Interactive Dash dashboard for financial data visualization.
 
 try:
     import dash
-    from dash import dcc, html, Input, Output, callback, State, clientside_callback, ALL
+    from dash import dcc, html, Input, Output, callback, State
     import dash_bootstrap_components as dbc
     import plotly.express as px
     import plotly.graph_objects as go
@@ -133,7 +133,103 @@ class FinancialDashboard:
                                 start_date=datetime.now() - timedelta(days=365),
                                 end_date=datetime.now(),
                                 display_format='YYYY-MM-DD'
+                            )
+                        ])
+                    ])
+                ], width=12)
+            ], className="mb-4"),
+            
+            # Tabs for different views
+            dbc.Tabs([
+                dbc.Tab(label="📊 Analytics", tab_id="analytics"),
+                dbc.Tab(label="📂 Categories", tab_id="categories"),
+                dbc.Tab(label="🔍 Review 'Other'", tab_id="review-other"),
+                dbc.Tab(label="📋 All Transactions", tab_id="all-transactions"),
+            ], id="main-tabs", active_tab="analytics"),
+            
+            html.Div(id="tab-content", className="mt-4")
+            
+        ], fluid=True)
+    
+    def setup_callbacks(self):
+        """Setup dashboard callbacks."""
+        
+        # Callback for updating summary cards
+        @self.app.callback(
+            [Output('total-income', 'children'),
+             Output('total-expenses', 'children'), 
+             Output('net-income', 'children'),
+             Output('total-transactions', 'children')],
+            [Input('date-range-picker', 'start_date'),
+             Input('date-range-picker', 'end_date')]
         )
+        def update_summary_cards(start_date, end_date):
+            # Filter data by date range
+            if start_date:
+                start_date = datetime.fromisoformat(start_date)
+            if end_date:
+                end_date = datetime.fromisoformat(end_date)
+            
+            filtered_data = analyzer.filter_transactions_by_date_range(
+                self.categorized_data, start_date, end_date
+            )
+            
+            # Calculate summary statistics
+            total_income = sum(t['amount'] for t in filtered_data if t['amount'] > 0)
+            total_expenses = sum(abs(t['amount']) for t in filtered_data if t['amount'] < 0)
+            net_income = total_income - total_expenses
+            
+            # Format summary values
+            income_str = f"${total_income:,.2f}"
+            expenses_str = f"${total_expenses:,.2f}"
+            net_str = f"${net_income:,.2f}"
+            net_color = "text-success" if net_income >= 0 else "text-danger"
+            
+            return (
+                income_str,
+                expenses_str, 
+                html.Span(net_str, className=net_color),
+                f"{len(filtered_data):,}",
+            )
+        
+        # Callback for tab content
+        @self.app.callback(
+            Output('tab-content', 'children'),
+            [Input('main-tabs', 'active_tab'),
+             Input('date-range-picker', 'start_date'),
+             Input('date-range-picker', 'end_date')]
+        )
+        def update_tab_content(active_tab, start_date, end_date):
+            # Filter data by date range
+            if start_date:
+                start_date = datetime.fromisoformat(start_date)
+            if end_date:
+                end_date = datetime.fromisoformat(end_date)
+            
+            filtered_data = analyzer.filter_transactions_by_date_range(
+                self.categorized_data, start_date, end_date
+            )
+            
+            if active_tab == "analytics":
+                return self.create_analytics_tab(filtered_data)
+            elif active_tab == "categories":
+                return self.create_categories_tab(filtered_data)
+            elif active_tab == "review-other":
+                return self.create_review_other_tab(filtered_data)
+            elif active_tab == "all-transactions":
+                return self.create_all_transactions_tab(filtered_data)
+            
+            return html.Div("Select a tab")
+        
+        # Callbacks for Review Other tab hierarchical categorization
+        # We'll add these dynamically since we don't know how many transactions there will be
+        self.setup_review_callbacks()
+    
+    def setup_review_callbacks(self):
+        """Setup callbacks for the enhanced Review Other functionality."""
+        # Note: These callbacks will be set up dynamically when the Review Other tab is loaded
+        # because the number of transactions (and thus dropdown IDs) varies
+        pass
     
     def handle_category_creation(self, new_category: str, new_subcategory: str = None) -> bool:
         """
@@ -499,7 +595,7 @@ class FinancialDashboard:
         for transaction in sorted_transactions:
             amount = transaction['amount']
             amount_class = "text-success" if amount > 0 else "text-danger"
-            amount_str = f"£{abs(amount):,.2f}"
+            amount_str = f"${abs(amount):,.2f}"
             
             row = html.Tr([
                 html.Td(transaction['date'].strftime('%d %b %Y')),  # More readable: "04 Mar 2026"
@@ -1002,14 +1098,7 @@ class FinancialDashboard:
                     f"Total impact: Fixing these groups will categorize {min(grouped_count, sum(len(group) for _, group in sorted_groups[:15]))} transactions. ",
                     f"Remaining: {max(0, len(desc_groups) - 15)} more description groups available."
                 ], className="text-muted")
-            ]),
-            
-            # Hidden div with subcategory lookup data for clientside callbacks
-            html.Div(
-                json.dumps(subcategory_lookup),
-                id='subcategory-lookup-data',
-                style={'display': 'none'}
-            )
+            ])
         ])
     
     def create_all_transactions_tab(self, filtered_data):
