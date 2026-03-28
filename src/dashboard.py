@@ -4,7 +4,7 @@ Interactive Dash dashboard for financial data visualization.
 
 try:
     import dash
-    from dash import dcc, html, Input, Output, callback, State
+    from dash import dcc, html, Input, Output, callback, State, clientside_callback, ALL
     import dash_bootstrap_components as dbc
     import plotly.express as px
     import plotly.graph_objects as go
@@ -227,196 +227,67 @@ class FinancialDashboard:
     
     def setup_review_callbacks(self):
         """Setup callbacks for the enhanced Review Other functionality."""
-        # Note: These callbacks will be set up dynamically when the Review Other tab is loaded
-        # because the number of transactions (and thus dropdown IDs) varies
-        pass
-    
-    def handle_category_creation(self, new_category: str, new_subcategory: str = None) -> bool:
-        """
-        Handle creation of new categories and subcategories in config.
         
-        Args:
-            new_category: Name of new category to create
-            new_subcategory: Optional subcategory name
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            # This would need to update the config.yaml file
-            # For now, we'll log the request
-            logger.info(f"Request to create new category: {new_category}")
-            if new_subcategory:
-                logger.info(f"  with subcategory: {new_subcategory}")
-            
-            # TODO: Implement config.yaml updating logic
-            # This would involve:
-            # 1. Reading current config.yaml
-            # 2. Adding new category/subcategory structure  
-            # 3. Writing back to config.yaml
-            # 4. Reloading categorizer with new config
-            
-            return True
-        except Exception as e:
-            logger.error(f"Failed to create category {new_category}: {e}")
-            return False
-    
-    def apply_categorization_correction(self, transaction_data: dict, new_category: str, new_subcategory: str) -> bool:
-        """
-        Apply categorization correction to a transaction.
-        
-        Args:
-            transaction_data: Transaction data
-            new_category: New category to assign
-            new_subcategory: New subcategory to assign
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            # This would update the categorized transactions file
-            # and provide feedback to the ML model
-            logger.info(f"Correcting transaction: {transaction_data.get('description', 'Unknown')}")
-            logger.info(f"  From: {transaction_data.get('category', 'other')} -> {transaction_data.get('subcategory', 'unknown')}")
-            logger.info(f"  To: {new_category} -> {new_subcategory}")
-            
-            # TODO: Implement transaction correction logic
-            # This would involve:
-            # 1. Updating the categorized transactions file
-            # 2. Saving user feedback for ML retraining
-            # 3. Optionally updating the ML model
-            
-            return True
-        except Exception as e:
-            logger.error(f"Failed to apply correction: {e}")
-            return False
-    
-    def apply_bulk_categorization(self, description: str, new_category: str, new_subcategory: str) -> dict:
-        """
-        Apply categorization to all transactions with the same description.
-        Updates both the in-memory data and persistent storage.
-        
-        Args:
-            description: Transaction description to match
-            new_category: New category to assign  
-            new_subcategory: New subcategory to assign
-            
-        Returns:
-            Dictionary with update results
-        """
-        try:
-            updated_count = 0
-            
-            # Update in-memory categorized data
-            for transaction in self.categorized_data:
-                if transaction.get('description', '').strip() == description.strip():
-                    transaction['category'] = new_category
-                    transaction['subcategory'] = new_subcategory
-                    transaction['categorization_method'] = 'user_corrected'
-                    transaction['user_corrected'] = True
-                    transaction['correction_timestamp'] = datetime.now().isoformat()
-                    updated_count += 1
-            
-            # Update persistent storage
-            self._save_updated_categorized_data()
-            
-            # Update rule-based categorizer's description history
-            from .categorizer import RuleBasedCategorizer
-            categorizer = RuleBasedCategorizer()
-            categorizer.update_description_history(description, new_category, new_subcategory)
-            categorizer.save_description_history()
-            
-            logger.info(f"Bulk update: '{description}' -> {new_category} -> {new_subcategory} ({updated_count} transactions)")
-            
-            return {
-                'success': True,
-                'updated_count': updated_count,
-                'description': description,
-                'category': new_category,
-                'subcategory': new_subcategory
+        # Clientside callback to set up dropdown dependencies
+        self.app.clientside_callback(
+            """
+            function(n_intervals, subcategory_data_json) {
+                if (!subcategory_data_json || n_intervals === 0) return "";
+                
+                const subcategory_data = JSON.parse(subcategory_data_json);
+                
+                // Set up dropdown dependencies
+                setTimeout(function() {
+                    // Find all category dropdowns
+                    const categoryDropdowns = document.querySelectorAll('[id*="group-category-dropdown-"]');
+                    
+                    categoryDropdowns.forEach(function(categoryDropdown) {
+                        // Extract group ID from the dropdown ID
+                        const groupId = categoryDropdown.id.split('-').pop();
+                        const subcategoryDropdown = document.getElementById('group-subcategory-dropdown-' + groupId);
+                        
+                        if (subcategoryDropdown && !categoryDropdown.hasAttribute('data-listener-added')) {
+                            // Mark that we've added the listener to avoid duplicates
+                            categoryDropdown.setAttribute('data-listener-added', 'true');
+                            
+                            // Add change event listener to category dropdown
+                            categoryDropdown.addEventListener('change', function() {
+                                const selectedCategory = this.value;
+                                
+                                // Clear subcategory dropdown
+                                subcategoryDropdown.innerHTML = '<option value="">Select subcategory...</option>';
+                                
+                                if (selectedCategory && selectedCategory !== 'CREATE_NEW_CATEGORY' && subcategory_data[selectedCategory]) {
+                                    // Enable subcategory dropdown
+                                    subcategoryDropdown.disabled = false;
+                                    
+                                    // Populate subcategory options
+                                    subcategory_data[selectedCategory].forEach(function(subcat) {
+                                        const option = document.createElement('option');
+                                        option.value = subcat.value;
+                                        option.textContent = subcat.label;
+                                        subcategoryDropdown.appendChild(option);
+                                    });
+                                } else {
+                                    // Disable subcategory dropdown
+                                    subcategoryDropdown.disabled = true;
+                                }
+                            });
+                            
+                            // Trigger change event if category is already selected
+                            if (categoryDropdown.value) {
+                                categoryDropdown.dispatchEvent(new Event('change'));
+                            }
+                        }
+                    });
+                }, 100);
+                
+                return "";
             }
-            
-        except Exception as e:
-            logger.error(f"Failed bulk categorization update: {e}")
-            return {
-                'success': False,
-                'error': str(e),
-                'updated_count': 0
-            }
-    
-    def _save_updated_categorized_data(self):
-        """Save the updated categorized data to file."""
-        try:
-            import os
-            import json
-            
-            categorized_path = config.get('data.categorized', './data/categorized')
-            os.makedirs(categorized_path, exist_ok=True)
-            
-            # Save to the main categorized file
-            output_file = os.path.join(categorized_path, 'all_categorized_transactions.json')
-            with open(output_file, 'w') as f:
-                json.dump(self.categorized_data, f, indent=2, default=str)
-            
-            logger.info(f"Saved updated categorized data to {output_file}")
-            
-        except Exception as e:
-            logger.error(f"Failed to save updated categorized data: {e}")
-    
-    def refresh_dashboard_data(self):
-        """Refresh the dashboard data without requiring a restart."""
-        try:
-            # Reload the categorized data
-            old_count = len(self.categorized_data)
-            self.load_data()
-            new_count = len(self.categorized_data)
-            
-            logger.info(f"Dashboard data refreshed: {old_count} -> {new_count} transactions")
-            
-            return {
-                'success': True,
-                'old_count': old_count,
-                'new_count': new_count
-            }
-        except Exception as e:
-            logger.error(f"Failed to refresh dashboard data: {e}")
-            return {
-                'success': False,
-                'error': str(e)
-            }
-    
-    def create_monthly_trends_chart(self, monthly_data: Dict) -> go.Figure:
-        """Create monthly income vs expenses chart."""
-        months = sorted(monthly_data.keys())
-        income_values = [monthly_data[month]['total_income'] for month in months]
-        expense_values = [monthly_data[month]['total_expenses'] for month in months]
-        
-        fig = go.Figure()
-        
-        fig.add_trace(go.Scatter(
-            x=months,
-            y=income_values,
-            mode='lines+markers',
-            name='Income',
-            line=dict(color='green'),
-            marker=dict(size=8)
-        ))
-        
-        fig.add_trace(go.Scatter(
-            x=months,
-            y=expense_values,
-            mode='lines+markers',
-            name='Expenses', 
-            line=dict(color='red'),
-            marker=dict(size=8)
-        ))
-        
-        fig.update_layout(
-            title="Monthly Income vs Expenses",
-            xaxis_title="Month",
-            yaxis_title="Amount ($)",
-            hovermode='x unified',
-            template='plotly_white'
+            """,
+            Output('dropdown-setup-trigger', 'children'),
+            [Input('dropdown-setup-interval', 'n_intervals'),
+             Input('subcategory-lookup-data', 'children')]
         )
         
         return fig
