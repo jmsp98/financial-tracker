@@ -289,8 +289,6 @@ class FinancialDashboard:
             [Input('dropdown-setup-interval', 'n_intervals'),
              Input('subcategory-lookup-data', 'children')]
         )
-        
-        return fig
     
     def create_category_pie_chart(self, transactions: List[Dict]) -> go.Figure:
         """Create category spending pie chart."""
@@ -455,24 +453,63 @@ class FinancialDashboard:
         
         header = html.Thead([
             html.Tr([
-                html.Th("Date"),
-                html.Th("Description"),
-                html.Th("Category"),
-                html.Th("Amount", className="text-end")
+                html.Th([
+                    html.I(className="fas fa-calendar-alt me-1"),
+                    "Date",
+                    html.Small(" (newest first)", className="text-muted")
+                ]),
+                html.Th([
+                    html.I(className="fas fa-align-left me-1"),
+                    "Description"
+                ]),
+                html.Th([
+                    html.I(className="fas fa-tags me-1"),
+                    "Category"
+                ]),
+                html.Th([
+                    html.I(className="fas fa-pound-sign me-1"),
+                    "Amount"
+                ], className="text-end")
             ])
         ])
         
         rows = []
         for transaction in sorted_transactions:
             amount = transaction['amount']
-            amount_class = "text-success" if amount > 0 else "text-danger"
-            amount_str = f"${abs(amount):,.2f}"
+            amount_class = "text-success fw-bold" if amount > 0 else "text-danger fw-bold"
+            amount_str = f"£{abs(amount):,.2f}"
+            
+            # Enhanced category display with subcategory
+            category = transaction.get('category', 'unknown').title()
+            subcategory = transaction.get('subcategory', '')
+            
+            if subcategory and subcategory.lower() != 'unknown':
+                category_display = html.Div([
+                    html.Strong(category),
+                    html.Br(),
+                    html.Small(subcategory.title(), className="text-muted")
+                ])
+            else:
+                category_display = html.Strong(category)
+            
+            # Truncate long descriptions with tooltip
+            description = transaction['description']
+            if len(description) > 60:
+                description_display = html.Span(
+                    description[:60] + "...",
+                    title=description  # Full description on hover
+                )
+            else:
+                description_display = description
             
             row = html.Tr([
-                html.Td(transaction['date'].strftime('%d %b %Y')),  # More readable: "04 Mar 2026"
-                html.Td(transaction['description'][:50] + "..." if len(transaction['description']) > 50 else transaction['description']),
-                html.Td(transaction['category'].title()),
-                html.Td(amount_str, className=f"{amount_class} text-end")
+                html.Td(
+                    transaction['date'].strftime('%d %b %Y'),
+                    className="text-nowrap"
+                ),
+                html.Td(description_display),
+                html.Td(category_display),
+                html.Td(amount_str, className=f"{amount_class} text-end text-nowrap")
             ])
             rows.append(row)
         
@@ -538,13 +575,62 @@ class FinancialDashboard:
                 ], width=6),
             ], className="mb-4"),
             
-            # Transaction table
+            # Transaction table with search functionality
             dbc.Row([
                 dbc.Col([
                     dbc.Card([
-                        dbc.CardHeader("Recent Transactions"),
+                        dbc.CardHeader([
+                            "📋 Recent Transactions",
+                            html.Small(f" ({len(filtered_data[:50])}/{len(filtered_data)} shown)", className="text-muted ms-2")
+                        ]),
                         dbc.CardBody([
-                            transactions_table
+                            # Search/filter controls
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.InputGroup([
+                                        dbc.InputGroupText([
+                                            html.I(className="fas fa-search")
+                                        ]),
+                                        dbc.Input(
+                                            id="transaction-search",
+                                            placeholder="Search transactions by description...",
+                                            type="text",
+                                            style={'fontSize': '0.9em'}
+                                        )
+                                    ], size="sm")
+                                ], width=6),
+                                dbc.Col([
+                                    dbc.Select(
+                                        id="transaction-category-filter",
+                                        options=[
+                                            {"label": "All Categories", "value": "all"},
+                                            {"label": "Income Only", "value": "income"},
+                                            {"label": "Expenses Only", "value": "expenses"}
+                                        ] + [
+                                            {"label": cat.title(), "value": cat} 
+                                            for cat in sorted(set(t.get('category', 'unknown') for t in filtered_data))
+                                        ],
+                                        value="all",
+                                        size="sm",
+                                        style={'fontSize': '0.9em'}
+                                    )
+                                ], width=4),
+                                dbc.Col([
+                                    html.Small([
+                                        "💡 Tip: Hover over truncated descriptions for full text"
+                                    ], className="text-muted")
+                                ], width=2)
+                            ], className="mb-3"),
+                            
+                            # Enhanced table with better styling
+                            html.Div([
+                                transactions_table
+                            ], style={
+                                'maxHeight': '500px',
+                                'overflowY': 'auto',
+                                'border': '1px solid #dee2e6',
+                                'borderRadius': '0.375rem'
+                            })
                         ])
                     ])
                 ], width=12)
@@ -924,6 +1010,10 @@ class FinancialDashboard:
             ], color="info"),
             
             subcategory_data,  # Hidden data for callbacks
+            
+            # Components for dropdown setup callback
+            html.Div(id='dropdown-setup-trigger', style={'display': 'none'}),
+            dcc.Interval(id='dropdown-setup-interval', interval=1000, max_intervals=1),
             
             html.Div([
                 review_table
