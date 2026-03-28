@@ -24,10 +24,10 @@ class UserFeedbackManager:
     
     def save_user_corrections(self, corrections: List[Dict[str, Any]]) -> bool:
         """
-        Save user corrections for transactions.
+        Save user corrections for transactions with hierarchical categories.
         
         Args:
-            corrections: List of correction dicts with transaction info and new category
+            corrections: List of correction dicts with transaction info, new category, and subcategory
             
         Returns:
             True if successful, False otherwise
@@ -36,16 +36,18 @@ class UserFeedbackManager:
             # Load existing feedback
             feedback_data = self._load_feedback()
             
-            # Add new corrections
+            # Add new corrections with hierarchical support
             for correction in corrections:
                 feedback_entry = {
                     'timestamp': datetime.now().isoformat(),
                     'original_description': correction.get('description', ''),
                     'original_category': correction.get('original_category', 'other'),
+                    'original_subcategory': correction.get('original_subcategory', 'unknown'),
                     'corrected_category': correction.get('new_category', ''),
+                    'corrected_subcategory': correction.get('new_subcategory', ''),
                     'transaction_date': correction.get('date', ''),
                     'amount': correction.get('amount', 0),
-                    'method': 'user_correction'
+                    'method': 'user_correction_hierarchical'
                 }
                 feedback_data.append(feedback_entry)
             
@@ -80,11 +82,12 @@ class UserFeedbackManager:
             with open(self.categorized_file, 'r') as f:
                 categorized_data = json.load(f)
             
-            # Apply corrections
+            # Apply corrections with hierarchical support
             corrections_applied = 0
             for correction in corrections:
                 description = correction.get('description', '').strip()
                 new_category = correction.get('new_category', '').lower().strip()
+                new_subcategory = correction.get('new_subcategory', '').lower().strip()
                 
                 if not description or not new_category:
                     continue
@@ -93,6 +96,7 @@ class UserFeedbackManager:
                 for transaction in categorized_data:
                     if self._is_similar_transaction(transaction.get('description', ''), description):
                         transaction['category'] = new_category
+                        transaction['subcategory'] = new_subcategory
                         transaction['categorization_method'] = 'user_corrected'
                         transaction['user_corrected'] = True
                         transaction['correction_timestamp'] = datetime.now().isoformat()
@@ -153,7 +157,16 @@ class UserFeedbackManager:
                     )
                     
                     transactions.append(transaction)
-                    categories.append(item.get('category', 'other'))
+                    
+                    # For hierarchical categorization, use combined category-subcategory label
+                    # This allows the ML model to learn the full hierarchical patterns
+                    category = item.get('category', 'other')
+                    subcategory = item.get('subcategory', 'unknown')
+                    
+                    # Create combined label for training: "category::subcategory"
+                    # This way the ML model can predict the full hierarchical classification
+                    combined_label = f"{category}::{subcategory}" if subcategory and subcategory != 'unknown' else category
+                    categories.append(combined_label)
                     
                 except Exception as e:
                     logger.warning(f"Skipping invalid transaction during retraining: {e}")

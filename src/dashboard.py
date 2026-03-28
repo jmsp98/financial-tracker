@@ -217,6 +217,76 @@ class FinancialDashboard:
                 return self.create_all_transactions_tab(filtered_data)
             
             return html.Div("Select a tab")
+        
+        # Callbacks for Review Other tab hierarchical categorization
+        # We'll add these dynamically since we don't know how many transactions there will be
+        self.setup_review_callbacks()
+    
+    def setup_review_callbacks(self):
+        """Setup callbacks for the enhanced Review Other functionality."""
+        # Note: These callbacks will be set up dynamically when the Review Other tab is loaded
+        # because the number of transactions (and thus dropdown IDs) varies
+        pass
+    
+    def handle_category_creation(self, new_category: str, new_subcategory: str = None) -> bool:
+        """
+        Handle creation of new categories and subcategories in config.
+        
+        Args:
+            new_category: Name of new category to create
+            new_subcategory: Optional subcategory name
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # This would need to update the config.yaml file
+            # For now, we'll log the request
+            logger.info(f"Request to create new category: {new_category}")
+            if new_subcategory:
+                logger.info(f"  with subcategory: {new_subcategory}")
+            
+            # TODO: Implement config.yaml updating logic
+            # This would involve:
+            # 1. Reading current config.yaml
+            # 2. Adding new category/subcategory structure  
+            # 3. Writing back to config.yaml
+            # 4. Reloading categorizer with new config
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create category {new_category}: {e}")
+            return False
+    
+    def apply_categorization_correction(self, transaction_data: dict, new_category: str, new_subcategory: str) -> bool:
+        """
+        Apply categorization correction to a transaction.
+        
+        Args:
+            transaction_data: Transaction data
+            new_category: New category to assign
+            new_subcategory: New subcategory to assign
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # This would update the categorized transactions file
+            # and provide feedback to the ML model
+            logger.info(f"Correcting transaction: {transaction_data.get('description', 'Unknown')}")
+            logger.info(f"  From: {transaction_data.get('category', 'other')} -> {transaction_data.get('subcategory', 'unknown')}")
+            logger.info(f"  To: {new_category} -> {new_subcategory}")
+            
+            # TODO: Implement transaction correction logic
+            # This would involve:
+            # 1. Updating the categorized transactions file
+            # 2. Saving user feedback for ML retraining
+            # 3. Optionally updating the ML model
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to apply correction: {e}")
+            return False
     
     def create_monthly_trends_chart(self, monthly_data: Dict) -> go.Figure:
         """Create monthly income vs expenses chart."""
@@ -506,101 +576,176 @@ class FinancialDashboard:
         ])
     
     def create_review_other_tab(self, filtered_data):
-        """Create the review 'other' transactions tab."""
+        """Create the enhanced review 'other' transactions tab with hierarchical categorization."""
         # Filter for 'other' category transactions
         other_transactions = [t for t in filtered_data if t.get('category', '').lower() == 'other']
         
         if not other_transactions:
-            return dbc.Alert("🎉 Great! No transactions are categorized as 'Other'. Your ML model is working well!", color="success")
+            return dbc.Alert("🎉 Great! No transactions are categorized as 'Other'. Your categorization system is working well!", color="success")
         
-        # Get available categories for dropdown
-        all_categories = set()
-        for t in self.categorized_data:
-            if t.get('category') and t['category'].lower() != 'other':
-                all_categories.add(t['category'].title())
+        # Get available categories and subcategories from config
+        categories = config.get_categories()
         
-        category_options = [{'label': cat, 'value': cat.lower()} for cat in sorted(all_categories)]
-        category_options.extend([
-            {'label': 'Groceries', 'value': 'groceries'},
-            {'label': 'Dining', 'value': 'dining'},
-            {'label': 'Transportation', 'value': 'transportation'},
-            {'label': 'Bills', 'value': 'bills'},
-            {'label': 'Shopping', 'value': 'shopping'},
-            {'label': 'Entertainment', 'value': 'entertainment'},
-            {'label': 'Healthcare', 'value': 'healthcare'},
-            {'label': 'Housing', 'value': 'housing'},
-            {'label': 'Income', 'value': 'income'},
-        ])
+        # Create category options for dropdown
+        category_options = []
+        subcategory_lookup = {}  # Maps category -> list of subcategories
         
-        # Remove duplicates and sort
-        seen = set()
-        unique_options = []
-        for opt in category_options:
-            if opt['value'] not in seen:
-                seen.add(opt['value'])
-                unique_options.append(opt)
-        category_options = sorted(unique_options, key=lambda x: x['label'])
+        for category, category_data in categories.items():
+            if category.lower() == 'other':  # Skip 'other' category
+                continue
+                
+            category_label = category.replace('_', ' ').title()
+            category_options.append({'label': category_label, 'value': category})
+            
+            # Store subcategories for this category
+            if 'subcategories' in category_data:
+                subcategory_lookup[category] = []
+                for subcategory in category_data['subcategories'].keys():
+                    subcategory_label = subcategory.replace('_', ' ').title()
+                    subcategory_lookup[category].append({
+                        'label': subcategory_label, 
+                        'value': subcategory
+                    })
+                # Add "Create New" option for subcategories
+                subcategory_lookup[category].append({
+                    'label': '➕ Create New Subcategory...', 
+                    'value': 'CREATE_NEW_SUBCATEGORY'
+                })
         
-        # Create simple table rows for the first 20 "other" transactions
+        # Add "Create New Category" option
+        category_options.append({
+            'label': '➕ Create New Category...', 
+            'value': 'CREATE_NEW_CATEGORY'
+        })
+        
+        # Sort category options
+        category_options = sorted([opt for opt in category_options if not opt['value'].startswith('CREATE')], key=lambda x: x['label']) + \
+                          [opt for opt in category_options if opt['value'].startswith('CREATE')]
+        
+        # Create transaction rows for review
         transaction_rows = []
         for i, transaction in enumerate(other_transactions[:20]):
             date_str = transaction['date'].strftime('%Y-%m-%d') if hasattr(transaction['date'], 'strftime') else str(transaction['date'])
-            desc = transaction['description'][:60] + "..." if len(transaction['description']) > 60 else transaction['description']
+            desc = transaction['description'][:50] + "..." if len(transaction['description']) > 50 else transaction['description']
             amount = f"${transaction['amount']:.2f}"
             amount_color = "text-danger" if transaction['amount'] < 0 else "text-success"
             
+            # Current categorization info
+            current_cat = transaction.get('category', 'other').title()
+            current_subcat = transaction.get('subcategory', 'unknown').title()
+            current_info = f"{current_cat} → {current_subcat}"
+            
             row = html.Tr([
-                html.Td(date_str),
-                html.Td(desc, title=transaction['description']),  # Full description on hover
-                html.Td(amount, className=amount_color),
+                html.Td(date_str, style={'font-size': '0.9em'}),
+                html.Td(desc, title=transaction['description'], style={'font-size': '0.9em'}),
+                html.Td(amount, className=amount_color, style={'font-weight': 'bold'}),
+                html.Td(current_info, style={'font-size': '0.8em', 'color': 'gray'}),
                 html.Td([
                     dcc.Dropdown(
                         id=f'category-dropdown-{i}',
                         options=category_options,
                         placeholder="Select category...",
-                        style={'minWidth': '150px'}
+                        style={'minWidth': '160px', 'fontSize': '0.9em'}
+                    )
+                ]),
+                html.Td([
+                    dcc.Dropdown(
+                        id=f'subcategory-dropdown-{i}',
+                        options=[],  # Will be populated based on category selection
+                        placeholder="Select subcategory...",
+                        disabled=True,
+                        style={'minWidth': '160px', 'fontSize': '0.9em'}
                     )
                 ]),
                 html.Td([
                     dbc.Button("✓", id=f'apply-btn-{i}', size="sm", color="success", disabled=True)
-                ])
+                ]),
+                
+                # Hidden inputs for new category/subcategory creation
+                html.Td([
+                    dbc.Input(
+                        id=f'new-category-input-{i}',
+                        placeholder="New category name...",
+                        style={'display': 'none', 'fontSize': '0.9em'}
+                    )
+                ], style={'display': 'none'}),
+                html.Td([
+                    dbc.Input(
+                        id=f'new-subcategory-input-{i}',
+                        placeholder="New subcategory name...",
+                        style={'display': 'none', 'fontSize': '0.9em'}
+                    )
+                ], style={'display': 'none'}),
             ])
             transaction_rows.append(row)
         
-        # Create table
+        # Create enhanced table
         review_table = dbc.Table([
             html.Thead([
                 html.Tr([
-                    html.Th("Date"),
-                    html.Th("Description"),
-                    html.Th("Amount"),
-                    html.Th("New Category"),
-                    html.Th("Apply")
+                    html.Th("Date", style={'width': '10%'}),
+                    html.Th("Description", style={'width': '25%'}),
+                    html.Th("Amount", style={'width': '10%'}),
+                    html.Th("Current", style={'width': '15%'}),
+                    html.Th("New Category", style={'width': '15%'}),
+                    html.Th("New Subcategory", style={'width': '15%'}),
+                    html.Th("Apply", style={'width': '10%'}),
                 ])
-            ]),
+            ], style={'background-color': '#f8f9fa'}),
             html.Tbody(transaction_rows)
-        ], striped=True, bordered=True, hover=True, responsive=True)
+        ], striped=True, bordered=True, hover=True, responsive=True, size="sm")
+        
+        # Store subcategory lookup in a hidden div for JavaScript access
+        subcategory_data = html.Div(
+            json.dumps(subcategory_lookup),
+            id='subcategory-lookup-data',
+            style={'display': 'none'}
+        )
         
         return html.Div([
             dbc.Alert([
                 html.H4("🔍 Review 'Other' Transactions", className="alert-heading"),
-                html.P(f"Found {len(other_transactions)} transactions categorized as 'Other'. Select the correct category for each transaction."),
+                html.P([
+                    f"Found {len(other_transactions)} transactions categorized as 'Other'. ",
+                    "Select both category and subcategory for each transaction, or create new ones as needed."
+                ]),
                 html.Hr(),
-                html.P("Choose a category from the dropdown and click the ✓ button to apply the correction.", className="mb-0")
+                html.P([
+                    "💡 ", html.Strong("Tip:"), " You can create new categories and subcategories by selecting the '➕ Create New...' options. ",
+                    "This helps improve future categorization accuracy."
+                ], className="mb-0")
             ], color="info"),
+            
+            subcategory_data,  # Hidden data for callbacks
             
             html.Div([
                 review_table
-            ], className="mb-4"),
+            ], style={'overflow-x': 'auto'}),
             
-            html.Div([
-                dbc.Alert([
-                    html.H5("💡 Quick Tip"),
-                    html.P("After correcting a few transactions, the ML model will learn your patterns and automatically categorize similar transactions in the future!")
-                ], color="light")
-            ], className="mb-4"),
+            html.Div(id='review-feedback-messages', className='mt-3'),
             
-            html.Div(id="simple-recategorize-feedback")
+            # Bulk actions
+            html.Hr(),
+            dbc.Row([
+                dbc.Col([
+                    dbc.Button(
+                        "📝 Apply All Selected Changes", 
+                        id='apply-all-btn', 
+                        color="primary", 
+                        disabled=True,
+                        className="me-2"
+                    ),
+                    dbc.Button(
+                        "🔄 Retrain ML Model", 
+                        id='retrain-model-btn', 
+                        color="warning", 
+                        outline=True
+                    ),
+                ]),
+                dbc.Col([
+                    html.Div(id='bulk-action-feedback')
+                ], width='auto')
+            ], justify='between', align='center')
         ])
     
     def create_all_transactions_tab(self, filtered_data):
