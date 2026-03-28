@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 from datetime import datetime
 import logging
 
-from .transaction_parser import Transaction
+from .parsers import Transaction
 from .config import config
 
 logger = logging.getLogger(__name__)
