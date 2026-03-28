@@ -13,7 +13,7 @@ categories:
   groceries:
     subcategories:
       tesco:
-        keywords: ["tesco stores", "tesco pfs", "tesco express", "tesco"]
+        keywords: ["sample store", "sample fuel", "sample express", "sample_store"]
       sainsburys:
         keywords: ["sainsburys", "sainsbury"]
       waitrose:
@@ -38,7 +38,7 @@ categories:
   food_drink:
     subcategories:
       cafe:
-        keywords: ["cafe", "coffee", "sample_cafe", "costa", "pret", "starbucks"]
+        keywords: ["cafe", "coffee", "sample_cafe", "sample_coffee", "pret", "starbucks"]
       restaurant:
         keywords: ["sample_restaurant", "sample_restaurant", "sample_restaurant", "sample_restaurant", "sample_restaurant", "sample_restaurant", "sample_restaurant", "sample_restaurant", "restaurant"]
       pub:

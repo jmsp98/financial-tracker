@@ -84,10 +84,10 @@ EXAMPLE OUTPUT:
 ===============
 
 Before Enhancement:
-  Date: 2026-02-05, Method: '))))', Description: 'COSTA COFFEE LONDON'
+  Date: 2026-02-05, Method: '))))', Description: 'SAMPLE COFFEE LONDON'
   
 After Enhancement:  
-  Date: 2026-02-05, Method: 'Contactless Payment', Category: 'Card Payments', Description: 'COSTA COFFEE LONDON'
+  Date: 2026-02-05, Method: 'Contactless Payment', Category: 'Card Payments', Description: 'SAMPLE COFFEE LONDON'
 
 IMPACT:
 =======
