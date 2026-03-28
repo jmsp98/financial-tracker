@@ -251,13 +251,15 @@ class GenericHSBCParser(BaseBankParser):
             # Enhanced patterns for page boundary content
             r'\d+\s*-\s*\d+\s+[A-Za-z]+\s+Road.*?(?=[A-Z]{2}|$)',  # Address patterns
             r'\d+\s+[A-Za-z]+\s+to\s+\d+\s+[A-Za-z]+\s+\d{4}',  # Date range patterns
-            r'[A-Za-z]+\s+[A-Za-z]+\s+[A-Za-z]+\s+Palmer.*',  # Name patterns (generic)
+            r'[A-Za-z]+\s+[A-Za-z]+\s+[A-Za-z]+\s+[A-Za-z]+.*',  # Name patterns (generic)
+            r'Account\s+Name.*',  # Account name lines
+            r'International\s+Bank.*',  # IBAN lines
             r'\d{8}\s+\d{3}',  # Account number patterns
             r'Paid\s+out\s+£Paid\s+in\s+£Balance\s+[\d,\.]+',  # Column header with balance
             # TARGETED contamination removal - only remove specific end patterns
             r'\s+SampleArea\s+London\s+H.*$',  # Remove " Sample City H" at END of line only
             r'\s+Worcester\s+College.*$',  # Remove college info at END only
-            r'\s+DD-\w+Palmer.*$',  # Remove direct debit with name at END only
+            r'\s+DD-\w+[A-Za-z]+.*$',  # Remove direct debit with account holder name at END only
             r'\s+BP\s+\w+\s+\w+\s+[\d,\.]+\s+[\d,\.]+$',  # Remove "BP name name amount amount" at end
             r'(\d{1,3}(?:,\d{3})*\.\d{2})\s+\1(?:\s|$)',  # Remove duplicate amounts like "4,151.94 4,151.94"
             # Generic postcode removal pattern (enhanced)
@@ -391,7 +393,7 @@ class GenericHSBCParser(BaseBankParser):
             r'\s*\d{1,3}(?:,\d{3})*\.\d{2}\s+SampleArea\s+London\s+H.*',  # Remove balance + Sample City H
             r'\s*SampleArea\s+London\s+H.*',  # Remove just Sample City H if no balance before
             r'\s*Worcester\s+College.*',  # Remove Sample_Location stuff
-            r'\s*DD-\w+Palmer.*',  # Remove DD-ACCOUNT_HOLDER stuff  
+            r'\s*DD-\w+[A-Za-z]+.*',  # Remove DD-AccountHolder patterns  
             r'\s*BP\s+\w+\s+\w+\s+[\d,\.]+.*',  # Remove BP person name amount
             r'\s*\d{1,3}(?:,\d{3})*\.\d{2}\s*$',  # Remove trailing balance amounts
         ]

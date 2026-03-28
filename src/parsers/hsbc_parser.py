@@ -278,7 +278,7 @@ class HSBCParser(BaseBankParser):
             r'see reverse for call times.*?(?=[A-Z][A-Z]|$)',  # Footer text until next transaction
             r'Text phone used by deaf.*?(?=[A-Z][A-Z]|$)',  # Accessibility text until next transaction
             r'Your Statement Account Name.*?(?=[A-Z][A-Z]|$)',  # Statement header until next transaction
-            r'ACCOUNT_HOLDER.*?(?=[A-Z][A-Z]|$)',  # Account holder name until next transaction
+            r'[A-Z][a-z]+\s+[A-Z][a-z]+\s+[A-Z][a-z]+\s+[A-Z][a-z]+.*?(?=[A-Z][A-Z]|$)',  # Account holder name until next transaction
             r'Your Bank Account details.*?(?=[A-Z][A-Z]|$)',  # Account details until next transaction
             r'Date Payment type and details.*?(?=[A-Z][A-Z]|$)',  # Table header until next transaction
         ]
