@@ -4,7 +4,7 @@ Interactive Dash dashboard for financial data visualization.
 
 try:
     import dash
-    from dash import dcc, html, Input, Output, callback, State
+    from dash import dcc, html, Input, Output, callback, State, clientside_callback, ALL
     import dash_bootstrap_components as dbc
     import plotly.express as px
     import plotly.graph_objects as go
@@ -133,100 +133,7 @@ class FinancialDashboard:
                                 start_date=datetime.now() - timedelta(days=365),
                                 end_date=datetime.now(),
                                 display_format='YYYY-MM-DD'
-                            )
-                        ])
-                    ])
-                ], width=12)
-            ], className="mb-4"),
-            
-            # Tabs for different views
-            dbc.Tabs([
-                dbc.Tab(label="📊 Analytics", tab_id="analytics"),
-                dbc.Tab(label="🔍 Review 'Other'", tab_id="review-other"),
-                dbc.Tab(label="📋 All Transactions", tab_id="all-transactions"),
-            ], id="main-tabs", active_tab="analytics"),
-            
-            html.Div(id="tab-content", className="mt-4")
-            
-        ], fluid=True)
-    
-    def setup_callbacks(self):
-        """Setup dashboard callbacks."""
-        
-        # Callback for updating summary cards
-        @self.app.callback(
-            [Output('total-income', 'children'),
-             Output('total-expenses', 'children'), 
-             Output('net-income', 'children'),
-             Output('total-transactions', 'children')],
-            [Input('date-range-picker', 'start_date'),
-             Input('date-range-picker', 'end_date')]
         )
-        def update_summary_cards(start_date, end_date):
-            # Filter data by date range
-            if start_date:
-                start_date = datetime.fromisoformat(start_date)
-            if end_date:
-                end_date = datetime.fromisoformat(end_date)
-            
-            filtered_data = analyzer.filter_transactions_by_date_range(
-                self.categorized_data, start_date, end_date
-            )
-            
-            # Calculate summary statistics
-            total_income = sum(t['amount'] for t in filtered_data if t['amount'] > 0)
-            total_expenses = sum(abs(t['amount']) for t in filtered_data if t['amount'] < 0)
-            net_income = total_income - total_expenses
-            
-            # Format summary values
-            income_str = f"${total_income:,.2f}"
-            expenses_str = f"${total_expenses:,.2f}"
-            net_str = f"${net_income:,.2f}"
-            net_color = "text-success" if net_income >= 0 else "text-danger"
-            
-            return (
-                income_str,
-                expenses_str, 
-                html.Span(net_str, className=net_color),
-                f"{len(filtered_data):,}",
-            )
-        
-        # Callback for tab content
-        @self.app.callback(
-            Output('tab-content', 'children'),
-            [Input('main-tabs', 'active_tab'),
-             Input('date-range-picker', 'start_date'),
-             Input('date-range-picker', 'end_date')]
-        )
-        def update_tab_content(active_tab, start_date, end_date):
-            # Filter data by date range
-            if start_date:
-                start_date = datetime.fromisoformat(start_date)
-            if end_date:
-                end_date = datetime.fromisoformat(end_date)
-            
-            filtered_data = analyzer.filter_transactions_by_date_range(
-                self.categorized_data, start_date, end_date
-            )
-            
-            if active_tab == "analytics":
-                return self.create_analytics_tab(filtered_data)
-            elif active_tab == "review-other":
-                return self.create_review_other_tab(filtered_data)
-            elif active_tab == "all-transactions":
-                return self.create_all_transactions_tab(filtered_data)
-            
-            return html.Div("Select a tab")
-        
-        # Callbacks for Review Other tab hierarchical categorization
-        # We'll add these dynamically since we don't know how many transactions there will be
-        self.setup_review_callbacks()
-    
-    def setup_review_callbacks(self):
-        """Setup callbacks for the enhanced Review Other functionality."""
-        # Note: These callbacks will be set up dynamically when the Review Other tab is loaded
-        # because the number of transactions (and thus dropdown IDs) varies
-        pass
     
     def handle_category_creation(self, new_category: str, new_subcategory: str = None) -> bool:
         """
@@ -592,7 +499,7 @@ class FinancialDashboard:
         for transaction in sorted_transactions:
             amount = transaction['amount']
             amount_class = "text-success" if amount > 0 else "text-danger"
-            amount_str = f"${abs(amount):,.2f}"
+            amount_str = f"£{abs(amount):,.2f}"
             
             row = html.Tr([
                 html.Td(transaction['date'].strftime('%d %b %Y')),  # More readable: "04 Mar 2026"
@@ -675,6 +582,137 @@ class FinancialDashboard:
                     ])
                 ], width=12)
             ])
+        ])
+    
+    def create_categories_tab(self, filtered_data):
+        """Create the Categories tab with category and subcategory visualizations."""
+        from collections import defaultdict
+        
+        # Aggregate data by categories and subcategories
+        category_totals = defaultdict(float)
+        subcategory_totals = defaultdict(lambda: defaultdict(float))
+        
+        for transaction in filtered_data:
+            category = transaction.get('category', 'other')
+            subcategory = transaction.get('subcategory', 'unknown')
+            amount = abs(transaction.get('amount', 0))  # Use absolute values for expense visualization
+            
+            # Skip income transactions for expense analysis (focus on spending)
+            if transaction.get('amount', 0) > 0:
+                continue
+                
+            category_totals[category] += amount
+            subcategory_totals[category][subcategory] += amount
+        
+        # Create main category bar chart
+        category_names = list(category_totals.keys())
+        category_amounts = list(category_totals.values())
+        
+        # Sort by amount descending
+        category_data = sorted(zip(category_names, category_amounts), key=lambda x: x[1], reverse=True)
+        sorted_categories, sorted_amounts = zip(*category_data) if category_data else ([], [])
+        
+        # Create category bar chart
+        category_fig = px.bar(
+            x=list(sorted_categories),
+            y=list(sorted_amounts),
+            title="Spending by Category",
+            labels={'x': 'Category', 'y': 'Total Amount (£)'},
+            color=list(sorted_amounts),
+            color_continuous_scale='viridis'
+        )
+        
+        category_fig.update_layout(
+            title_font_size=18,
+            showlegend=False,
+            height=400,
+            template='plotly_white'
+        )
+        
+        # Format category labels
+        category_fig.update_xaxes(
+            tickangle=45,
+            title="Category"
+        )
+        category_fig.update_yaxes(
+            title="Amount (£)",
+            tickformat='£,.0f'
+        )
+        
+        # Create subcategory charts for each category
+        subcategory_charts = []
+        
+        for category in sorted_categories[:8]:  # Show top 8 categories to avoid overcrowding
+            if category in subcategory_totals and len(subcategory_totals[category]) > 1:
+                subcat_data = subcategory_totals[category]
+                
+                # Sort subcategories by amount
+                subcat_items = sorted(subcat_data.items(), key=lambda x: x[1], reverse=True)
+                subcat_names, subcat_amounts = zip(*subcat_items) if subcat_items else ([], [])
+                
+                # Create subcategory chart
+                subcat_fig = px.bar(
+                    x=list(subcat_names),
+                    y=list(subcat_amounts),
+                    title=f"{category.replace('_', ' ').title()} - Subcategories",
+                    labels={'x': 'Subcategory', 'y': 'Amount (£)'},
+                    color=list(subcat_amounts),
+                    color_continuous_scale='plasma'
+                )
+                
+                subcat_fig.update_layout(
+                    title_font_size=14,
+                    showlegend=False,
+                    height=300,
+                    template='plotly_white'
+                )
+                
+                subcat_fig.update_xaxes(
+                    tickangle=45,
+                    title=""
+                )
+                subcat_fig.update_yaxes(
+                    title="£",
+                    tickformat='£,.0f'
+                )
+                
+                subcategory_charts.append(
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardBody([
+                                dcc.Graph(figure=subcat_fig)
+                            ])
+                        ])
+                    ], width=6, className="mb-3")
+                )
+        
+        # Create layout
+        return html.Div([
+            # Overall category spending
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("💰 Total Spending by Category"),
+                        dbc.CardBody([
+                            dcc.Graph(figure=category_fig)
+                        ])
+                    ])
+                ], width=12)
+            ], className="mb-4"),
+            
+            # Subcategory breakdowns
+            dbc.Row([
+                dbc.Col([
+                    html.H4("📊 Subcategory Breakdown", className="mb-3"),
+                    html.P("Detailed spending within each category", className="text-muted mb-4")
+                ], width=12)
+            ]),
+            
+            # Subcategory charts in a grid
+            dbc.Row(subcategory_charts) if subcategory_charts else dbc.Alert(
+                "📊 Subcategory data will appear here when you have transactions with multiple subcategories per category.",
+                color="info"
+            )
         ])
     
     def create_review_other_tab(self, filtered_data):
@@ -964,7 +1002,14 @@ class FinancialDashboard:
                     f"Total impact: Fixing these groups will categorize {min(grouped_count, sum(len(group) for _, group in sorted_groups[:15]))} transactions. ",
                     f"Remaining: {max(0, len(desc_groups) - 15)} more description groups available."
                 ], className="text-muted")
-            ])
+            ]),
+            
+            # Hidden div with subcategory lookup data for clientside callbacks
+            html.Div(
+                json.dumps(subcategory_lookup),
+                id='subcategory-lookup-data',
+                style={'display': 'none'}
+            )
         ])
     
     def create_all_transactions_tab(self, filtered_data):
