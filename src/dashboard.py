@@ -290,6 +290,65 @@ class FinancialDashboard:
         
         return fig
     
+    def create_subcategory_pie_chart(self, transactions: List[Dict], selected_category: str = None) -> go.Figure:
+        """Create subcategory spending pie chart for a specific category or all subcategories."""
+        # Only include expenses (negative amounts)
+        expense_transactions = [t for t in transactions if t['amount'] < 0]
+        
+        # Filter by category if specified
+        if selected_category:
+            expense_transactions = [t for t in expense_transactions if t.get('category', '').lower() == selected_category.lower()]
+        
+        subcategory_totals = {}
+        for transaction in expense_transactions:
+            category = transaction.get('category', 'Unknown').title()
+            subcategory = transaction.get('subcategory', 'Unknown')
+            amount = abs(transaction['amount'])
+            
+            # Create hierarchical labels
+            if selected_category:
+                # Show just subcategories for the selected category
+                label = subcategory.title() if subcategory else 'Unknown'
+            else:
+                # Show category -> subcategory for all
+                label = f"{category} → {subcategory.title()}" if subcategory else f"{category} → Unknown"
+            
+            if label not in subcategory_totals:
+                subcategory_totals[label] = 0
+            subcategory_totals[label] += amount
+        
+        if not subcategory_totals:
+            # Empty chart if no data
+            fig = go.Figure()
+            fig.add_annotation(
+                text="No expense data available",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, xanchor='center', yanchor='middle',
+                showarrow=False, font=dict(size=16)
+            )
+            return fig
+        
+        # Limit to top 15 subcategories for readability
+        sorted_subcategories = sorted(subcategory_totals.items(), key=lambda x: x[1], reverse=True)
+        if len(sorted_subcategories) > 15:
+            top_subcategories = sorted_subcategories[:14]
+            other_total = sum(amount for _, amount in sorted_subcategories[14:])
+            top_subcategories.append(('Others', other_total))
+            subcategory_totals = dict(top_subcategories)
+        
+        title = f"Spending by Subcategory" + (f" - {selected_category.title()}" if selected_category else "")
+        
+        fig = px.pie(
+            values=list(subcategory_totals.values()),
+            names=list(subcategory_totals.keys()),
+            title=title
+        )
+        
+        fig.update_traces(textposition='inside', textinfo='percent+label')
+        fig.update_layout(template='plotly_white')
+        
+        return fig
+    
     def create_category_trends_chart(self, transactions: List[Dict]) -> go.Figure:
         """Create category spending trends over time."""
         monthly_data = analyzer.calculate_monthly_summary(transactions)
@@ -387,6 +446,9 @@ class FinancialDashboard:
         # Category trends chart
         category_trends_fig = self.create_category_trends_chart(filtered_data)
         
+        # Subcategory pie chart 
+        subcategory_pie_fig = self.create_subcategory_pie_chart(filtered_data)
+        
         # Transactions table
         transactions_table = self.create_transactions_table(filtered_data[:50])  # Show 50 most recent
         
@@ -419,7 +481,15 @@ class FinancialDashboard:
                             dcc.Graph(figure=category_trends_fig)
                         ])
                     ])
-                ], width=12)
+                ], width=6),
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Spending by Subcategory"),
+                        dbc.CardBody([
+                            dcc.Graph(figure=subcategory_pie_fig)
+                        ])
+                    ])
+                ], width=6),
             ], className="mb-4"),
             
             # Transaction table

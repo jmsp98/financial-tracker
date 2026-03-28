@@ -199,21 +199,23 @@ class MLCategorizer:
         
         return results
     
-    def predict_category(self, transaction: Transaction, confidence_threshold: float = 0.6) -> Tuple[str, float]:
+    def predict_category(self, transaction: Transaction, confidence_threshold: float = 0.6) -> Tuple[str, Optional[str], float]:
         """
-        Predict category for a single transaction.
+        Predict category and subcategory for a single transaction.
         
         Args:
             transaction: Transaction object to categorize
             confidence_threshold: Minimum confidence for ML prediction
             
         Returns:
-            Tuple of (category, confidence)
+            Tuple of (category, subcategory, confidence)
         """
         if not self.is_trained or self.model is None:
             # Fall back to rule-based categorization
-            category = self.rule_based_categorizer.categorize_transaction(transaction)
-            return category, 0.0
+            category, subcategory = self.rule_based_categorizer.categorize_transaction(transaction)
+            # Fall back to rule-based categorization
+            category, subcategory = self.rule_based_categorizer.categorize_transaction(transaction)
+            return category, subcategory, 0.0
         
         try:
             # Extract features for single transaction
@@ -227,17 +229,67 @@ class MLCategorizer:
             
             # Use ML prediction if confidence is high enough
             if confidence >= confidence_threshold:
-                return prediction, confidence
+                # ML prediction gives us category, we need to determine subcategory
+                ml_category = prediction
+                
+                # Use rule-based categorizer to get subcategory for this category
+                # by checking if the transaction matches any subcategory within the predicted category
+                rule_category, rule_subcategory = self.rule_based_categorizer.categorize_transaction(transaction)
+                
+                # If rule-based gives same category, use its subcategory
+                if rule_category == ml_category:
+                    return ml_category, rule_subcategory, confidence
+                else:
+                    # ML predicted different category, use ML category with best-guess subcategory
+                    subcategory = self._predict_subcategory_for_category(transaction, ml_category)
+                    return ml_category, subcategory, confidence
             else:
-                # Fall back to rule-based categorization
-                logger.debug(f"ML confidence {confidence:.2f} below threshold {confidence_threshold}, using rule-based")
-                category = self.rule_based_categorizer.categorize_transaction(transaction)
-                return category, 0.0
+                # Low confidence, fall back to rule-based
+                category, subcategory = self.rule_based_categorizer.categorize_transaction(transaction)
+                return category, subcategory, 0.0
                 
         except Exception as e:
-            logger.warning(f"ML categorization failed: {e}, falling back to rule-based")
-            category = self.rule_based_categorizer.categorize_transaction(transaction)
-            return category, 0.0
+            logger.warning(f"ML prediction failed for transaction {transaction.description}: {e}")
+            # Fall back to rule-based categorization
+            category, subcategory = self.rule_based_categorizer.categorize_transaction(transaction)
+            return category, subcategory, 0.0
+    
+    def _predict_subcategory_for_category(self, transaction: Transaction, category: str) -> Optional[str]:
+        """
+        Predict the best subcategory for a given category using keyword matching.
+        
+        Args:
+            transaction: Transaction object
+            category: Target category to find subcategory for
+            
+        Returns:
+            Subcategory name or None if no match found
+        """
+        description = transaction.description.lower()
+        
+        # Get subcategories for this category from config
+        if category not in self.rule_based_categorizer.subcategory_patterns:
+            return None
+            
+        # Check each subcategory pattern
+        for subcategory, pattern in self.rule_based_categorizer.subcategory_patterns[category].items():
+            if pattern.search(description):
+                return subcategory
+        
+        # No specific subcategory found, return a default based on category
+        default_subcategories = {
+            'groceries': 'other_grocery',
+            'food_drink': 'restaurant', 
+            'transportation': 'other_transport',
+            'shopping': 'other_shopping',
+            'entertainment': 'other_entertainment',
+            'healthcare': 'other_healthcare',
+            'bills': 'services',
+            'utilities': 'other_utilities',
+            'income': 'transfers'
+        }
+        
+        return default_subcategories.get(category, 'unknown')
     
     def categorize_transactions(self, transactions: List[Transaction]) -> List[Dict]:
         """
@@ -253,7 +305,7 @@ class MLCategorizer:
         ml_used_count = 0
         
         for transaction in transactions:
-            category, confidence = self.predict_category(transaction)
+            category, subcategory, confidence = self.predict_category(transaction)
             
             if confidence > 0:
                 ml_used_count += 1
@@ -265,6 +317,7 @@ class MLCategorizer:
                 'balance': transaction.balance if transaction.balance is not None else 0.0,
                 'type': transaction.transaction_type,
                 'category': category,
+                'subcategory': subcategory,
                 'ml_confidence': confidence,
                 'categorization_method': 'ml' if confidence > 0 else 'rule_based'
             }
