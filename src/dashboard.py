@@ -496,6 +496,103 @@ class FinancialDashboard:
         
         return fig
     
+    def _get_smart_category_suggestions(self, description_lower):
+        """Smart category suggestions based on keywords and patterns."""
+        
+        # Food & Drink keywords and patterns
+        food_keywords = [
+            # Cafes and food places
+            'cafe', 'coffee', 'coffe', 'starbucks', 'costa', 'pret', 'nero',
+            'restaurant', 'pizz', 'burger', 'mcdonald', 'kfc', 'subway',
+            'takeaway', 'chippy', 'fish shop', 'indian', 'chinese', 'thai',
+            # University/college food services
+            'college', 'university', 'uni ', 'campus', 'refectory', 'canteen',
+            'magdalen', 'oxford', 'cambridge', 'dining', 'hall', 'lodge',
+            # General food terms
+            'food', 'lunch', 'dinner', 'breakfast', 'meal', 'eating',
+            'sandwich', 'snack', 'bakery', 'deli', 'grocery',
+            # Supermarkets
+            'tesco', 'sainsbury', 'asda', 'morrisons', 'aldi', 'lidl',
+            'waitrose', 'marks spencer', 'co-op', 'iceland'
+        ]
+        
+        # Transport keywords
+        transport_keywords = [
+            'petrol', 'fuel', 'diesel', 'bp ', 'shell', 'esso', 'texaco',
+            'train', 'railway', 'bus', 'taxi', 'uber', 'lyft', 'parking',
+            'ticket', 'travel', 'journey', 'station', 'airport'
+        ]
+        
+        # Shopping keywords
+        shopping_keywords = [
+            'amazon', 'ebay', 'argos', 'currys', 'john lewis', 'next',
+            'h&m', 'zara', 'primark', 'boots', 'superdrug', 'wilko'
+        ]
+        
+        # Bills & Utilities keywords
+        utilities_keywords = [
+            'electric', 'gas', 'water', 'council tax', 'internet', 'broadband',
+            'mobile', 'phone', 'vodafone', 'ee ', 'o2', 'three', 'bt ',
+            'sky', 'virgin', 'tv licence', 'netflix', 'spotify'
+        ]
+        
+        # Healthcare keywords
+        healthcare_keywords = [
+            'pharmacy', 'chemist', 'doctor', 'dentist', 'hospital', 'nhs',
+            'medical', 'prescription', 'optician', 'health'
+        ]
+        
+        # Check for food & drink patterns
+        for keyword in food_keywords:
+            if keyword in description_lower:
+                # Determine subcategory
+                if any(k in description_lower for k in ['cafe', 'coffee', 'coffe', 'starbucks', 'costa', 'pret']):
+                    return 'food_and_drink', 'cafes_coffee'
+                elif any(k in description_lower for k in ['college', 'university', 'magdalen', 'oxford', 'cambridge', 'campus']):
+                    return 'food_and_drink', 'restaurants_dining_out'
+                elif any(k in description_lower for k in ['tesco', 'sainsbury', 'asda', 'morrisons', 'aldi', 'lidl']):
+                    return 'food_and_drink', 'groceries'
+                elif any(k in description_lower for k in ['restaurant', 'dining', 'takeaway', 'pizz', 'burger']):
+                    return 'food_and_drink', 'restaurants_dining_out'
+                else:
+                    return 'food_and_drink', 'groceries'
+        
+        # Check for transport patterns (only if not food)
+        for keyword in transport_keywords:
+            if keyword in description_lower:
+                if any(k in description_lower for k in ['petrol', 'fuel', 'diesel', 'bp', 'shell', 'esso']):
+                    return 'transport', 'fuel'
+                elif any(k in description_lower for k in ['train', 'railway', 'bus', 'ticket']):
+                    return 'transport', 'public_transport'
+                elif any(k in description_lower for k in ['taxi', 'uber', 'lyft']):
+                    return 'transport', 'taxi_rideshare'
+                else:
+                    return 'transport', 'other_transport'
+        
+        # Check for shopping patterns
+        for keyword in shopping_keywords:
+            if keyword in description_lower:
+                return 'shopping', 'general_retail'
+        
+        # Check for utilities patterns
+        for keyword in utilities_keywords:
+            if keyword in description_lower:
+                if any(k in description_lower for k in ['electric', 'gas', 'water', 'council tax']):
+                    return 'bills_and_utilities', 'utilities'
+                elif any(k in description_lower for k in ['mobile', 'phone', 'vodafone', 'ee', 'o2']):
+                    return 'bills_and_utilities', 'mobile_phone'
+                elif any(k in description_lower for k in ['internet', 'broadband', 'bt', 'sky', 'virgin']):
+                    return 'bills_and_utilities', 'internet_tv'
+                else:
+                    return 'bills_and_utilities', 'other_bills'
+        
+        # Check for healthcare patterns
+        for keyword in healthcare_keywords:
+            if keyword in description_lower:
+                return 'healthcare', 'medical_expenses'
+        
+        return None
+    
     def create_transactions_table(self, transactions: List[Dict]) -> html.Table:
         """Create transactions table."""
         if not transactions:
@@ -888,11 +985,16 @@ class FinancialDashboard:
             """Check if similar description has been categorized before."""
             desc_lower = description.lower().strip()
             
-            # Check all transactions for similar descriptions
+            # First, check all transactions for identical descriptions
             for txn in filtered_data:
                 if (txn.get('category', '').lower() != 'other' and 
                     txn['description'].lower().strip() == desc_lower):
                     return txn.get('category'), txn.get('subcategory')
+            
+            # Smart keyword-based categorization for common patterns
+            smart_suggestions = self._get_smart_category_suggestions(desc_lower)
+            if smart_suggestions:
+                return smart_suggestions
             
             # Check for partial matches (keywords)
             for txn in filtered_data:
