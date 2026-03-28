@@ -409,6 +409,105 @@ class FinancialDashboard:
                     html.Strong("❌ Unexpected Error"), 
                     f" Failed to retrain model: {str(e)}"
                 ], color="danger", duration=8000)
+        
+        # Add transaction filtering and sorting callback
+        @self.app.callback(
+            Output('filtered-transactions-table', 'children'),
+            [Input('transaction-search', 'value'),
+             Input('transaction-category-filter', 'value'),
+             Input('sort-column-store', 'data'),
+             Input('sort-direction-store', 'data')],
+            [State('tab-content', 'children')],
+            prevent_initial_call=True
+        )
+        def update_transaction_table(search_value, category_filter, sort_column, sort_direction, tab_content):
+            """Update transaction table based on filters and sorting."""
+            # Get the current filtered data from the active tab
+            if not hasattr(self, '_current_filtered_data'):
+                return "No data available"
+            
+            filtered_data = self._current_filtered_data
+            
+            # Apply search filter
+            if search_value and search_value.strip():
+                search_lower = search_value.lower()
+                filtered_data = [
+                    t for t in filtered_data 
+                    if search_lower in t['description'].lower()
+                ]
+            
+            # Apply category filter
+            if category_filter and category_filter != 'all':
+                if category_filter == 'income':
+                    filtered_data = [t for t in filtered_data if t['amount'] > 0]
+                elif category_filter == 'expenses':
+                    filtered_data = [t for t in filtered_data if t['amount'] < 0]
+                else:
+                    filtered_data = [t for t in filtered_data if t.get('category', '').lower() == category_filter.lower()]
+            
+            # Apply sorting
+            if sort_column:
+                reverse = (sort_direction == 'desc')
+                
+                if sort_column == 'date':
+                    # Ensure dates are datetime objects for sorting
+                    for txn in filtered_data:
+                        if isinstance(txn['date'], str):
+                            try:
+                                txn['date'] = datetime.fromisoformat(txn['date'])
+                            except:
+                                txn['date'] = datetime.strptime(txn['date'], '%Y-%m-%d %H:%M:%S')
+                    filtered_data.sort(key=lambda x: x['date'], reverse=reverse)
+                elif sort_column == 'amount':
+                    filtered_data.sort(key=lambda x: x['amount'], reverse=reverse)
+                elif sort_column == 'description':
+                    filtered_data.sort(key=lambda x: x['description'].lower(), reverse=reverse)
+                elif sort_column == 'category':
+                    filtered_data.sort(key=lambda x: (x.get('category', ''), x.get('subcategory', '')), reverse=reverse)
+            
+            # Return updated table
+            return self.create_transactions_table(filtered_data[:50], sort_by_date=False)
+        
+        # Add column header click callback for sorting
+        @self.app.callback(
+            [Output('sort-column-store', 'data'),
+             Output('sort-direction-store', 'data')],
+            [Input('sort-date-btn', 'n_clicks'),
+             Input('sort-description-btn', 'n_clicks'),
+             Input('sort-category-btn', 'n_clicks'),
+             Input('sort-amount-btn', 'n_clicks')],
+            [State('sort-column-store', 'data'),
+             State('sort-direction-store', 'data')],
+            prevent_initial_call=True
+        )
+        def handle_column_sorting(date_clicks, desc_clicks, cat_clicks, amount_clicks, 
+                                current_column, current_direction):
+            """Handle column header clicks for sorting."""
+            ctx = dash.callback_context
+            if not ctx.triggered:
+                return current_column, current_direction
+            
+            button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+            
+            # Determine which column was clicked
+            if button_id == 'sort-date-btn':
+                new_column = 'date'
+            elif button_id == 'sort-description-btn':
+                new_column = 'description'
+            elif button_id == 'sort-category-btn':
+                new_column = 'category'
+            elif button_id == 'sort-amount-btn':
+                new_column = 'amount'
+            else:
+                return current_column, current_direction
+            
+            # Toggle direction if same column, otherwise default to descending
+            if current_column == new_column:
+                new_direction = 'asc' if current_direction == 'desc' else 'desc'
+            else:
+                new_direction = 'desc'  # Default to descending for new columns
+            
+            return new_column, new_direction
     
     def create_category_pie_chart(self, transactions: List[Dict]) -> go.Figure:
         """Create category spending pie chart."""
@@ -834,21 +933,52 @@ class FinancialDashboard:
         header = html.Thead([
             html.Tr([
                 html.Th([
-                    html.I(className="fas fa-calendar-alt me-1"),
-                    "Date",
-                    html.Small(" (newest first)", className="text-muted")
+                    dbc.Button([
+                        html.I(className="fas fa-calendar-alt me-1"),
+                        "Date",
+                        html.I(className="fas fa-sort ms-1", style={"opacity": "0.6"})
+                    ], 
+                    id="sort-date-btn",
+                    color="link", 
+                    className="text-decoration-none p-0 text-dark fw-bold",
+                    style={"border": "none", "background": "none"}
+                    )
                 ]),
                 html.Th([
-                    html.I(className="fas fa-align-left me-1"),
-                    "Description"
+                    dbc.Button([
+                        html.I(className="fas fa-align-left me-1"),
+                        "Description",
+                        html.I(className="fas fa-sort ms-1", style={"opacity": "0.6"})
+                    ], 
+                    id="sort-description-btn",
+                    color="link", 
+                    className="text-decoration-none p-0 text-dark fw-bold",
+                    style={"border": "none", "background": "none"}
+                    )
                 ]),
                 html.Th([
-                    html.I(className="fas fa-tags me-1"),
-                    "Category"
+                    dbc.Button([
+                        html.I(className="fas fa-tags me-1"),
+                        "Category",
+                        html.I(className="fas fa-sort ms-1", style={"opacity": "0.6"})
+                    ], 
+                    id="sort-category-btn",
+                    color="link", 
+                    className="text-decoration-none p-0 text-dark fw-bold",
+                    style={"border": "none", "background": "none"}
+                    )
                 ]),
                 html.Th([
-                    html.I(className="fas fa-pound-sign me-1"),
-                    "Amount"
+                    dbc.Button([
+                        html.I(className="fas fa-pound-sign me-1"),
+                        "Amount",
+                        html.I(className="fas fa-sort ms-1", style={"opacity": "0.6"})
+                    ], 
+                    id="sort-amount-btn",
+                    color="link", 
+                    className="text-decoration-none p-0 text-dark fw-bold",
+                    style={"border": "none", "background": "none"}
+                    )
                 ], className="text-end")
             ])
         ])
@@ -899,6 +1029,9 @@ class FinancialDashboard:
     
     def create_analytics_tab(self, filtered_data):
         """Create the analytics tab content."""
+        # Store filtered data for callback access
+        self._current_filtered_data = filtered_data
+        
         # Monthly trends chart
         monthly_data = analyzer.calculate_monthly_summary(filtered_data)
         monthly_trend_fig = self.create_monthly_trends_chart(monthly_data)
@@ -1012,15 +1145,19 @@ class FinancialDashboard:
                                 ], width=2)
                             ], className="mb-3"),
                             
-                            # Enhanced table with better styling
-                            html.Div([
+                            # Enhanced table with better styling - dynamic filtering
+                            html.Div(id='filtered-transactions-table', children=[
                                 transactions_table
                             ], style={
                                 'maxHeight': '500px',
                                 'overflowY': 'auto',
                                 'border': '1px solid #dee2e6',
                                 'borderRadius': '0.375rem'
-                            })
+                            }),
+                            
+                            # Hidden data stores for sorting state
+                            dcc.Store(id='sort-column-store', data=None),
+                            dcc.Store(id='sort-direction-store', data='desc')
                         ])
                     ])
                 ], width=12)

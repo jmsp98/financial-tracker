@@ -1,6 +1,32 @@
-# Data directories (contains sensitive financial information)
+# Financial Data - NEVER COMMIT
 data/
 *.pdf
+*statement*
+*Statement*
+*.csv
+*transactions*.json
+*categorized*.json
+
+# Personal Information
+*palmer*
+*Palmer*
+*jack*
+*Jack*
+*personal*
+
+# Analysis and Debug Files
+analyze_*.py
+debug_*.py
+find_*.py
+show_*.py
+examine_*.py
+count_*.py
+detailed_*.py
+pdf_structure_*.json
+*_analysis.json
+test_*_detection.py
+test_*_edge_cases.py
+validate_balances.py
 
 # Python
 __pycache__/
@@ -8,8 +34,26 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
 venv/
+env/
 ENV/
 env.bak/
 venv.bak/
@@ -34,9 +78,31 @@ Thumbs.db
 *.log
 logs/
 
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
 # Temporary files
 *.tmp
-*.bak
+*.temp
+temp/
+tmp/
 
-# Config overrides (if you want to keep personal config private)
-config.local.yaml
+# Configuration files that might contain secrets
+config.ini
+settings.ini
+.env
+.env.*
+secrets.py
+secrets.json
+
+# Machine Learning Models
+*.pkl
+*.pickle
+models/
+checkpoints/
+
+# Test outputs
+test_output/
+test_results/

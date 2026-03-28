@@ -160,6 +160,23 @@ def main(input_dir: str, output_dir: str) -> bool:
             logger.info(f"Successfully processed {len(pdf_files)} files with {len(all_transactions)} total transactions")
             logger.info(f"Primary currency detected: {primary_currency['symbol']} ({primary_currency['iso_code']}) with {primary_currency['confidence']} confidence")
             logger.info(f"Results saved to: {output_dir}")
+            
+            # Run basic balance validation
+            try:
+                from validate_balances import validate_all_files
+                logger.info("Running balance validation...")
+                validation_results = validate_all_files(input_dir, summarize=True)
+                if validation_results:
+                    total_errors = sum(result['error_count'] for result in validation_results)
+                    if total_errors > 0:
+                        logger.warning(f"Balance validation found {total_errors} potential parsing issues")
+                    else:
+                        logger.info("Balance validation passed - all balances match!")
+            except ImportError:
+                logger.debug("Balance validation not available (validate_balances module not found)")
+            except Exception as e:
+                logger.warning(f"Balance validation failed: {e}")
+            
             return True
         else:
             logger.warning("No transactions extracted from any PDF files")

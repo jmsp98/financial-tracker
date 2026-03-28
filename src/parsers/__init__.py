@@ -3,7 +3,7 @@ Bank statement parsers package.
 """
 
 from .base_parser import BaseBankParser, Transaction
-from .hsbc_parser import HSBCParser
+from .generic_hsbc_parser import GenericHSBCParser
 from .parser_factory import ParserFactory
 
-__all__ = ['BaseBankParser', 'Transaction', 'HSBCParser', 'ParserFactory']
+__all__ = ['BaseBankParser', 'Transaction', 'GenericHSBCParser', 'ParserFactory']

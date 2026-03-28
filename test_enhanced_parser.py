@@ -15,7 +15,7 @@ def test_enhanced_parser():
     print("🧪 TESTING ENHANCED HSBC PARSER")
     print("=" * 60)
     
-    pdf_path = "data/raw/2026-03-04_Statement.pdf"
+    pdf_path = "data/raw/sample_statement.pdf"  # Use sample data for testing
     
     if not os.path.exists(pdf_path):
         print("❌ PDF file not found:", pdf_path)

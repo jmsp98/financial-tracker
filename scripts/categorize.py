@@ -24,9 +24,28 @@ def load_transactions_from_file(file_path: str) -> List[Transaction]:
         with open(file_path, 'r') as f:
             data = json.load(f)
         
+        # Handle both old format (direct array) and new format (with "transactions" key)
+        if isinstance(data, dict) and 'transactions' in data:
+            transaction_list = data['transactions']
+        elif isinstance(data, list):
+            transaction_list = data
+        else:
+            logger.error(f"Unexpected data format in {file_path}")
+            return []
+        
         transactions = []
-        for item in data:
+        for item in transaction_list:
             try:
+                # Handle both old format (just raw transaction data) and new format (with currency fields)
+                if isinstance(item, str):
+                    # This is the problematic case - skip malformed data
+                    logger.warning(f"Skipping malformed transaction data: {item}")
+                    continue
+                
+                if not isinstance(item, dict):
+                    logger.warning(f"Skipping invalid transaction: expected dict, got {type(item)}")
+                    continue
+                    
                 # Parse date
                 date_str = item['date']
                 if isinstance(date_str, str):

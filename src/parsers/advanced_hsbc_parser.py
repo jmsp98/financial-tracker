@@ -560,7 +560,7 @@ class AdvancedHSBCParser(BaseBankParser):
         
         Format examples:
         "05 Feb VIS TESCO STORES 2586 HOOVER"
-        "26   DD-ACCOUNT_HOLDER SAMPLE_LOCATION"
+        "26   DD-AccountHolder SAMPLE_LOCATION"
         "    CR REFUND FROM MERCHANT"
         """
         if not text or text.strip() == '':
@@ -624,7 +624,7 @@ class AdvancedHSBCParser(BaseBankParser):
             return ""
         
         # Remove common HSBC reference patterns
-        description = re.sub(r'DD-\w+Palmer', 'DD', description)  # Remove direct debit references
+        description = re.sub(r'DD-\w+[A-Za-z]+', 'DD', description)  # Remove direct debit references
         description = re.sub(r'\b\d{6}\s+\d{8}\b', '', description)  # Remove sort code + account
         
         # Remove trailing balance amounts that might have leaked in

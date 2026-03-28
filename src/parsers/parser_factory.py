@@ -5,7 +5,8 @@ Parser factory for automatically detecting and creating appropriate bank parsers
 import re
 from typing import Optional, Type, Dict, Any
 from .base_parser import BaseBankParser
-from .hsbc_parser import HSBCParser
+from .generic_hsbc_parser import GenericHSBCParser
+from .advanced_hsbc_parser import AdvancedHSBCParser
 
 
 class ParserFactory:
@@ -13,7 +14,8 @@ class ParserFactory:
     
     # Registry of available parsers
     _parsers: Dict[str, Type[BaseBankParser]] = {
-        'hsbc': HSBCParser,
+        'hsbc': AdvancedHSBCParser,  # Use advanced ML-enhanced parser by default
+        'hsbc_legacy': GenericHSBCParser,  # Keep legacy parser for fallback
     }
     
     # Detection patterns for each bank

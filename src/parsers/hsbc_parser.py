@@ -572,14 +572,29 @@ class HSBCParser(BaseBankParser):
                 amounts['paid_out'] = transaction_amount  # Assume debit for now, we'll adjust later
                 amounts['balance'] = potential_balance
             else:
-                # Only one amount, could be transaction amount or balance
-                # Check if this amount is very large (likely balance) vs small (likely transaction)
-                if potential_balance > 1000:
-                    # Likely a balance
+                # Only one amount on the line
+                # In HSBC format, this could be either a transaction amount or a balance
+                # We need to be more sophisticated about detection
+                
+                # For lines with payment methods (CR, DD, VIS, ))), this is usually a transaction amount
+                # For lines without payment methods or with balance keywords, it's likely a balance
+                has_payment_method = any(method in line for method in ['CR ', 'DD ', 'VIS ', '))) ', 'TFR '])
+                has_balance_keyword = any(keyword in line.upper() for keyword in ['BALANCE', 'BROUGHT', 'CARRIED', 'FORWARD'])
+                
+                if has_balance_keyword:
+                    # Definitely a balance
                     amounts['balance'] = potential_balance
-                else:
-                    # Likely a transaction amount
+                elif has_payment_method:
+                    # Likely a transaction amount (regardless of size)
                     amounts['paid_out'] = potential_balance
+                else:
+                    # Ambiguous case - use size heuristic as fallback
+                    if potential_balance > 5000:
+                        # Very large amount, likely a balance
+                        amounts['balance'] = potential_balance
+                    else:
+                        # Assume transaction amount
+                        amounts['paid_out'] = potential_balance
         
         return amounts
     
