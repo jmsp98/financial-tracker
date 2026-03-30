@@ -7,6 +7,7 @@ A free, local financial tracker that processes HSBC bank statement PDFs and prov
 - **PDF Processing** -- Extracts transactions from HSBC statement PDFs using pdfplumber with penny-perfect balance validation
 - **ML Categorization** -- Pure ML-based transaction categorization (no API costs, runs offline)
 - **Interactive Dashboard** -- Localhost web dashboard with Plotly charts, recurring payment detection, and vendor analysis
+- **Smart Caching** -- Processed data is cached so the dashboard starts in under a second on subsequent launches
 - **Privacy First** -- All data stays on your machine; nothing is sent to external services
 
 ## Quick Start
@@ -23,6 +24,14 @@ A free, local financial tracker that processes HSBC bank statement PDFs and prov
    python scripts/run_dashboard.py
    ```
    Then open http://127.0.0.1:8050 in your browser.
+
+The first run extracts and categorizes all PDFs (~30s for 6 statements). Subsequent runs use cached data and start in under a second. If you add new PDFs to `data/raw/`, re-processing happens automatically.
+
+To force a full re-extraction (e.g. after changing parser or categorizer code):
+
+```bash
+python scripts/run_dashboard.py --reprocess
+```
 
 ## Individual Scripts
 
@@ -43,7 +52,7 @@ python scripts/demo_pure_ml.py                                    # Demo the ML 
 ├── data/                    # Git-ignored data folder
 │   ├── raw/                 # Original PDF bank statements
 │   ├── processed/           # Extracted transaction JSON
-│   ├── categorized/         # Categorized transaction JSON
+│   ├── categorized/         # Categorized transaction JSON + .cache_meta.json
 │   └── models/              # Trained ML model (.pkl)
 ├── src/                     # Core modules
 │   ├── parsers/             # PDF parsing (advanced_hsbc_parser.py)
