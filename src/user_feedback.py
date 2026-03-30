@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Any
 
-from .ml_categorizer import MLCategorizer
+from .pure_ml_categorizer import PureMLCategorizer
 from .config import config
 
 logger = logging.getLogger(__name__)
@@ -171,11 +171,25 @@ class UserFeedbackManager:
                 except Exception as e:
                     logger.warning(f"Skipping invalid transaction during retraining: {e}")
             
-            # Retrain ML model
-            ml_categorizer = MLCategorizer()
-            training_results = ml_categorizer.train_model(transactions, categories)
+            # Retrain Pure ML model
+            pure_ml_categorizer = PureMLCategorizer()
             
-            logger.info("ML model retrained successfully with user corrections")
+            # Parse combined labels back to separate categories and subcategories
+            parsed_categories = []
+            parsed_subcategories = []
+            
+            for label in categories:
+                if '::' in label:
+                    category, subcategory = label.split('::', 1)
+                    parsed_categories.append(category)
+                    parsed_subcategories.append(subcategory)
+                else:
+                    parsed_categories.append(label)
+                    parsed_subcategories.append('unknown')
+            
+            training_results = pure_ml_categorizer.train_model(transactions, parsed_categories, parsed_subcategories)
+            
+            logger.info("Pure ML model retrained successfully with user corrections")
             return training_results
             
         except Exception as e:

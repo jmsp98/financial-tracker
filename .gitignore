@@ -7,11 +7,17 @@ data/
 *transactions*.json
 *categorized*.json
 
-# Personal Information
-*palmer*
-*Palmer*
-*jack*
-*Jack*
+# Training Data - NEVER COMMIT (contains personal financial info)
+training_data/
+*training*.json
+user_feedback.json
+historical_*.json
+*manual_categorizations*
+categorization_session_stats.json
+categorization_progress.json
+
+# Personal Configuration - NEVER COMMIT
+personal_config.py
 *personal*
 
 # Analysis and Debug Files
@@ -26,6 +32,12 @@ pdf_structure_*.json
 *_analysis.json
 test_*_detection.py
 test_*_edge_cases.py
+test_extraction_modes.py
+test_feb_specific.py
+test_mar_specific.py
+test_sequential_parser.py
+balance_analysis.py
+verify_calculations.py
 validate_balances.py
 
 # Python
@@ -105,4 +117,4 @@ checkpoints/
 
 # Test outputs
 test_output/
-test_results/
+test_results/personal_config.py

@@ -44,9 +44,147 @@ class FinancialDashboard:
         self.setup_layout()
         self.setup_callbacks()
     
+    def auto_process_bank_statements(self):
+        """Automatically process any new bank statements in data/raw/"""
+        try:
+            raw_path = config.get('data.raw', './data/raw')
+            processed_path = config.get('data.processed', './data/processed')
+            categorized_path = config.get('data.categorized', './data/categorized')
+            
+            # Check if there are PDF files in raw directory
+            pdf_files = [f for f in os.listdir(raw_path) if f.lower().endswith('.pdf')]
+            
+            if not pdf_files:
+                logger.info("No PDF bank statements found in data/raw/")
+                return False
+            
+            logger.info(f"Found {len(pdf_files)} PDF bank statements. Auto-processing...")
+            
+            # Import processing modules
+            from .pdf_extractor import PDFExtractor
+            from .parsers.parser_factory import ParserFactory
+            from .pure_ml_categorizer import PureMLCategorizer
+            
+            # Create directories
+            os.makedirs(processed_path, exist_ok=True)
+            os.makedirs(categorized_path, exist_ok=True)
+            
+            # Step 1: Extract and parse transactions from PDFs
+            parser_factory = ParserFactory()
+            all_transactions = []
+            failed_pdfs = []
+            
+            print(f"\n📄 Processing {len(pdf_files)} PDF statements...")
+            
+            for pdf_file in sorted(pdf_files):
+                pdf_path = os.path.join(raw_path, pdf_file)
+                
+                try:
+                    # Get appropriate parser first
+                    extractor = PDFExtractor()
+                    text = extractor.extract_text(pdf_path)
+                    parser = parser_factory.create_parser(text)
+                    
+                    if parser:
+                        # Check if parser has direct PDF parsing method
+                        if hasattr(parser, 'parse_transactions_from_pdf'):
+                            transactions = parser.parse_transactions_from_pdf(pdf_path)
+                        else:
+                            tables = extractor.extract_tables(pdf_path)
+                            transactions = parser.parse_transactions(text, tables)
+                        
+                        if len(transactions) == 0:
+                            print(f"  ⚠️  {pdf_file}: 0 transactions (parser: {type(parser).__name__}) - SKIPPED")
+                            failed_pdfs.append(pdf_file)
+                        else:
+                            print(f"  ✅  {pdf_file}: {len(transactions)} transactions")
+                            all_transactions.extend(transactions)
+                        
+                        logger.info(f"Extracted {len(transactions)} transactions from {pdf_file}")
+                    else:
+                        print(f"  ❌  {pdf_file}: no suitable parser found")
+                        failed_pdfs.append(pdf_file)
+                        logger.warning(f"No suitable parser found for {pdf_file}")
+                        
+                except Exception as e:
+                    print(f"  ❌  {pdf_file}: error - {e}")
+                    failed_pdfs.append(pdf_file)
+                    logger.error(f"Error processing {pdf_file}: {e}")
+                    continue
+            
+            # Summary
+            success_count = len(pdf_files) - len(failed_pdfs)
+            print(f"\n📊 Processed {success_count}/{len(pdf_files)} PDFs: {len(all_transactions)} total transactions")
+            if failed_pdfs:
+                print(f"⚠️  Failed: {', '.join(failed_pdfs)}")
+            
+            if not all_transactions:
+                logger.warning("No transactions extracted from PDF files")
+                return False
+            
+            # Step 2: Save processed transactions
+            processed_data = []
+            for txn in all_transactions:
+                processed_data.append({
+                    'date': txn.date.isoformat(),
+                    'description': txn.description,
+                    'amount': txn.amount,
+                    'balance': txn.balance,
+                    'transaction_type': txn.transaction_type,
+                    'payment_method': txn.payment_method,
+                    'merchant': txn.merchant,
+                    'location': txn.location,
+                    'raw_description': txn.raw_description,
+                    'reference': txn.reference
+                })
+            
+            processed_file = os.path.join(processed_path, 'all_transactions.json')
+            with open(processed_file, 'w') as f:
+                json.dump(processed_data, f, indent=2, default=str)
+            
+            logger.info(f"Saved {len(processed_data)} processed transactions")
+            
+            # Step 3: Categorize transactions using Pure ML
+            categorizer = PureMLCategorizer()
+            categorized_transactions = categorizer.categorize_transactions(all_transactions)
+            
+            # Step 4: Save categorized transactions
+            categorized_file = os.path.join(categorized_path, 'all_categorized_transactions.json')
+            with open(categorized_file, 'w') as f:
+                json.dump(categorized_transactions, f, indent=2, default=str)
+            
+            logger.info(f"Auto-processing complete! Categorized {len(categorized_transactions)} transactions")
+            
+            # Count ML vs unknown predictions
+            ml_predictions = sum(1 for t in categorized_transactions if t.get('category') != 'unknown')
+            unknown_predictions = len(categorized_transactions) - ml_predictions
+            logger.info(f"ML categorized: {ml_predictions}, Unknown: {unknown_predictions}")
+            
+            if not categorizer.is_trained:
+                logger.info("💡 Train the ML model for better categorization: python scripts/train_ml_model.py")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Auto-processing failed: {e}")
+            return False
+
     def load_data(self):
-        """Load categorized transaction data and detect currency."""
+        """Load categorized transaction data and detect currency. Auto-process if needed."""
         categorized_path = config.get('data.categorized', './data/categorized')
+        
+        # First, try auto-processing any new bank statements
+        processing_success = self.auto_process_bank_statements()
+        
+        if not processing_success:
+            print("⚠️  Auto-processing extracted 0 transactions from raw PDFs")
+            # Check if stale cached data exists
+            target_file = os.path.join(categorized_path, 'all_categorized_transactions.json')
+            if os.path.exists(target_file):
+                mod_time = datetime.fromtimestamp(os.path.getmtime(target_file))
+                print(f"   Loading previously cached data from {mod_time.strftime('%Y-%m-%d %H:%M')} (may be outdated)")
+            else:
+                print("   No cached data available either. Dashboard will be empty.")
         
         # Look for the most recent categorized data file
         try:
@@ -108,40 +246,56 @@ class FinancialDashboard:
                 className="mb-4"
             ),
             
-            # Summary cards
+            # Enhanced Balance Flow Summary cards
             dbc.Row([
                 dbc.Col([
                     dbc.Card([
                         dbc.CardBody([
-                            html.H4("Total Income", className="card-title"),
-                            html.H2(id="total-income", className="text-success")
+                            html.H6("Starting Balance", className="card-title"),
+                            html.H3(id="starting-balance", className="text-info")
                         ])
                     ])
-                ], width=3),
+                ], width=2),
                 dbc.Col([
                     dbc.Card([
                         dbc.CardBody([
-                            html.H4("Total Expenses", className="card-title"),
-                            html.H2(id="total-expenses", className="text-danger")
+                            html.H6("Total Income", className="card-title"),
+                            html.H3(id="total-income", className="text-success")
                         ])
                     ])
-                ], width=3),
+                ], width=2),
                 dbc.Col([
                     dbc.Card([
                         dbc.CardBody([
-                            html.H4("Net Income", className="card-title"),
-                            html.H2(id="net-income")
+                            html.H6("Total Expenses", className="card-title"),
+                            html.H3(id="total-expenses", className="text-danger")
                         ])
                     ])
-                ], width=3),
+                ], width=2),
                 dbc.Col([
                     dbc.Card([
                         dbc.CardBody([
-                            html.H4("Transactions", className="card-title"),
-                            html.H2(id="total-transactions")
+                            html.H6("Net Flow", className="card-title"),
+                            html.H3(id="net-income")
                         ])
                     ])
-                ], width=3),
+                ], width=2),
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardBody([
+                            html.H6("Ending Balance", className="card-title"),
+                            html.H3(id="ending-balance", className="text-info")
+                        ])
+                    ])
+                ], width=2),
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardBody([
+                            html.H6("Transactions", className="card-title"),
+                            html.H3(id="total-transactions")
+                        ])
+                    ])
+                ], width=2),
             ], className="mb-4"),
             
             # Date range selector
@@ -165,6 +319,7 @@ class FinancialDashboard:
             dbc.Tabs([
                 dbc.Tab(label="📊 Analytics", tab_id="analytics"),
                 dbc.Tab(label="📂 Categories", tab_id="categories"),
+                dbc.Tab(label="🔄 Recurring & Vendors", tab_id="recurring-vendors"),
                 dbc.Tab(label="🔍 Review 'Other'", tab_id="review-other"),
                 dbc.Tab(label="📋 All Transactions", tab_id="all-transactions"),
             ], id="main-tabs", active_tab="analytics"),
@@ -176,11 +331,13 @@ class FinancialDashboard:
     def setup_callbacks(self):
         """Setup dashboard callbacks."""
         
-        # Callback for updating summary cards
+        # Callback for updating enhanced balance flow summary cards
         @self.app.callback(
-            [Output('total-income', 'children'),
+            [Output('starting-balance', 'children'),
+             Output('total-income', 'children'),
              Output('total-expenses', 'children'), 
              Output('net-income', 'children'),
+             Output('ending-balance', 'children'),
              Output('total-transactions', 'children')],
             [Input('date-range-picker', 'start_date'),
              Input('date-range-picker', 'end_date')]
@@ -196,22 +353,75 @@ class FinancialDashboard:
                 self.categorized_data, start_date, end_date
             )
             
-            # Calculate summary statistics
+            if not filtered_data:
+                return (
+                    f"{self.currency_symbol}0.00",
+                    f"{self.currency_symbol}0.00", 
+                    f"{self.currency_symbol}0.00",
+                    f"{self.currency_symbol}0.00",
+                    f"{self.currency_symbol}0.00",
+                    "0",
+                    "No transactions in selected date range"
+                )
+            
+            # Sort transactions by date to get chronological order
+            sorted_data = sorted(filtered_data, key=lambda x: x['date'])
+            
+            # Find transactions with actual balance data (not None and not 0.0)
+            balance_transactions = [t for t in sorted_data 
+                                  if t.get('balance') is not None and t.get('balance') != 0.0]
+            
+            if not balance_transactions:
+                # No balance data available, just show totals from all transactions
+                total_income = sum(t['amount'] for t in filtered_data if t['amount'] > 0)
+                total_expenses = sum(abs(t['amount']) for t in filtered_data if t['amount'] < 0)
+                net_flow = total_income - total_expenses
+                
+                return (
+                    "N/A",
+                    f"{self.currency_symbol}{total_income:,.2f}", 
+                    f"{self.currency_symbol}{total_expenses:,.2f}",
+                    html.Span(f"{self.currency_symbol}{net_flow:,.2f}", 
+                             className="text-success" if net_flow >= 0 else "text-danger"),
+                    "N/A",
+                    f"{len(filtered_data):,}",
+                    dbc.Alert("⚠️ No balance information available in transactions", color="warning", className="mb-0")
+                )
+            
+            # Get starting and ending balances from available balance data
+            first_balance_txn = balance_transactions[0]
+            last_balance_txn = balance_transactions[-1]
+            
+            # Calculate the true opening balance: the balance field is an end-of-day
+            # value, so we must subtract ALL transactions up to and including that
+            # transaction, not just its own amount.
+            idx = sorted_data.index(first_balance_txn)
+            cumulative = sum(t['amount'] for t in sorted_data[:idx + 1])
+            opening_balance = first_balance_txn['balance'] - cumulative
+            
+            starting_balance = opening_balance
+            ending_balance = last_balance_txn['balance']
+            
+            # Calculate total income and expenses from ALL transactions
             total_income = sum(t['amount'] for t in filtered_data if t['amount'] > 0)
             total_expenses = sum(abs(t['amount']) for t in filtered_data if t['amount'] < 0)
-            net_income = total_income - total_expenses
+            net_flow = total_income - total_expenses
             
-            # Format summary values
+            # Format values
+            starting_str = f"{self.currency_symbol}{starting_balance:,.2f}"
             income_str = f"{self.currency_symbol}{total_income:,.2f}"
             expenses_str = f"{self.currency_symbol}{total_expenses:,.2f}"
-            net_str = f"{self.currency_symbol}{net_income:,.2f}"
-            net_color = "text-success" if net_income >= 0 else "text-danger"
+            net_str = f"{self.currency_symbol}{net_flow:,.2f}"
+            ending_str = f"{self.currency_symbol}{ending_balance:,.2f}"
+            net_color = "text-success" if net_flow >= 0 else "text-danger"
             
             return (
+                starting_str,
                 income_str,
                 expenses_str, 
                 html.Span(net_str, className=net_color),
-                f"{len(filtered_data):,}",
+                ending_str,
+                f"{len(filtered_data):,}"
             )
         
         # Callback for tab content
@@ -236,12 +446,63 @@ class FinancialDashboard:
                 return self.create_analytics_tab(filtered_data)
             elif active_tab == "categories":
                 return self.create_categories_tab(filtered_data)
+            elif active_tab == "recurring-vendors":
+                return self.create_recurring_vendors_tab(filtered_data)
             elif active_tab == "review-other":
                 return self.create_review_other_tab(filtered_data)
             elif active_tab == "all-transactions":
                 return self.create_all_transactions_tab(filtered_data)
             
             return html.Div("Select a tab")
+        
+        # Waterfall aggregation callback
+        @self.app.callback(
+            [Output('daily-waterfall-chart', 'figure'),
+             Output('waterfall-daily-btn', 'color'),
+             Output('waterfall-weekly-btn', 'color'),
+             Output('waterfall-monthly-btn', 'color')],
+            [Input('waterfall-daily-btn', 'n_clicks'),
+             Input('waterfall-weekly-btn', 'n_clicks'),
+             Input('waterfall-monthly-btn', 'n_clicks'),
+             Input('date-range-picker', 'start_date'),
+             Input('date-range-picker', 'end_date')],
+            [State('daily-waterfall-chart', 'figure')],
+            prevent_initial_call=False
+        )
+        def update_waterfall_aggregation(daily_clicks, weekly_clicks, monthly_clicks, start_date, end_date, current_fig):
+            """Handle waterfall aggregation button clicks and date range changes."""
+            ctx = dash.callback_context
+            
+            # Filter data by date range
+            if start_date:
+                start_date = datetime.fromisoformat(start_date)
+            if end_date:
+                end_date = datetime.fromisoformat(end_date)
+            
+            filtered_data = analyzer.filter_transactions_by_date_range(
+                self.categorized_data, start_date, end_date
+            )
+            
+            # Determine which aggregation to use
+            aggregation = 'daily'  # default
+            if ctx.triggered:
+                button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+                if button_id == 'waterfall-weekly-btn':
+                    aggregation = 'weekly'
+                elif button_id == 'waterfall-monthly-btn':
+                    aggregation = 'monthly'
+                elif button_id == 'waterfall-daily-btn':
+                    aggregation = 'daily'
+            
+            # Create the waterfall chart with the selected aggregation
+            waterfall_fig = self.create_waterfall_chart_with_aggregation(filtered_data, aggregation)
+            
+            # Update button colors for active state
+            daily_color = "primary" if aggregation == 'daily' else "outline-primary"
+            weekly_color = "primary" if aggregation == 'weekly' else "outline-primary"
+            monthly_color = "primary" if aggregation == 'monthly' else "outline-primary"
+            
+            return waterfall_fig, daily_color, weekly_color, monthly_color
         
         # Callbacks for Review Other tab hierarchical categorization
         # We'll add these dynamically since we don't know how many transactions there will be
@@ -433,7 +694,8 @@ class FinancialDashboard:
                 search_lower = search_value.lower()
                 filtered_data = [
                     t for t in filtered_data 
-                    if search_lower in t['description'].lower()
+                    if search_lower in t['description'].lower() or
+                       search_lower in self.get_payment_method_display(t).lower()
                 ]
             
             # Apply category filter
@@ -462,6 +724,8 @@ class FinancialDashboard:
                     filtered_data.sort(key=lambda x: x['amount'], reverse=reverse)
                 elif sort_column == 'description':
                     filtered_data.sort(key=lambda x: x['description'].lower(), reverse=reverse)
+                elif sort_column == 'payment_method':
+                    filtered_data.sort(key=lambda x: self.get_payment_method_display(x).lower(), reverse=reverse)
                 elif sort_column == 'category':
                     filtered_data.sort(key=lambda x: (x.get('category', ''), x.get('subcategory', '')), reverse=reverse)
             
@@ -472,15 +736,16 @@ class FinancialDashboard:
         @self.app.callback(
             [Output('sort-column-store', 'data'),
              Output('sort-direction-store', 'data')],
-            [Input('sort-date-btn', 'n_clicks'),
-             Input('sort-description-btn', 'n_clicks'),
-             Input('sort-category-btn', 'n_clicks'),
-             Input('sort-amount-btn', 'n_clicks')],
+             [Input('sort-date-btn', 'n_clicks'),
+              Input('sort-payment-method-btn', 'n_clicks'),
+              Input('sort-description-btn', 'n_clicks'),
+              Input('sort-category-btn', 'n_clicks'),
+              Input('sort-amount-btn', 'n_clicks')],
             [State('sort-column-store', 'data'),
              State('sort-direction-store', 'data')],
             prevent_initial_call=True
         )
-        def handle_column_sorting(date_clicks, desc_clicks, cat_clicks, amount_clicks, 
+        def handle_column_sorting(date_clicks, payment_method_clicks, desc_clicks, cat_clicks, amount_clicks, 
                                 current_column, current_direction):
             """Handle column header clicks for sorting."""
             ctx = dash.callback_context
@@ -492,6 +757,8 @@ class FinancialDashboard:
             # Determine which column was clicked
             if button_id == 'sort-date-btn':
                 new_column = 'date'
+            elif button_id == 'sort-payment-method-btn':
+                new_column = 'payment_method'
             elif button_id == 'sort-description-btn':
                 new_column = 'description'
             elif button_id == 'sort-category-btn':
@@ -733,6 +1000,276 @@ class FinancialDashboard:
         
         return fig
     
+    def create_daily_waterfall_chart(self, filtered_data: List[Dict], aggregation='daily') -> go.Figure:
+        """Create traditional waterfall chart with aggregated net flows and connecting lines."""
+        try:
+            if not filtered_data:
+                return self._create_empty_chart("No transaction data available")
+            
+            # Get 6-month window and prepare data
+            windowed_data, opening_balance = self._prepare_waterfall_data(filtered_data)
+            
+            if not windowed_data:
+                return self._create_empty_chart("No transactions in the selected time window")
+            
+            # Create aggregated waterfall data
+            waterfall_data = self._create_aggregated_waterfall_data(windowed_data, opening_balance, aggregation)
+            
+            # Build traditional waterfall visualization
+            fig = self._build_traditional_waterfall(waterfall_data, aggregation)
+            
+            return fig
+            
+        except Exception as e:
+            logger.error(f"Error creating waterfall chart: {e}")
+            return self._create_empty_chart(f"Error processing data: {str(e)}")
+    
+    def create_waterfall_chart_with_aggregation(self, filtered_data: List[Dict], aggregation='daily') -> go.Figure:
+        """Wrapper method for callback compatibility."""
+        return self.create_daily_waterfall_chart(filtered_data, aggregation)
+    
+    def _prepare_waterfall_data(self, filtered_data):
+        """Prepare data window and calculate opening balance."""
+        # Get 6-month window
+        dates = []
+        for txn in filtered_data:
+            if isinstance(txn['date'], str):
+                dates.append(datetime.fromisoformat(txn['date']))
+            else:
+                dates.append(txn['date'])
+        
+        latest_date = max(dates)
+        six_months_ago = latest_date - timedelta(days=180)
+        earliest_date = min(dates)
+        window_start = max(six_months_ago, earliest_date)
+        
+        # Filter to window
+        windowed_data = []
+        for txn in filtered_data:
+            txn_date = txn['date'] if isinstance(txn['date'], datetime) else datetime.fromisoformat(txn['date'])
+            if txn_date >= window_start:
+                windowed_data.append(txn)
+        
+        # Calculate opening balance using existing dashboard logic
+        balance_transactions = [t for t in filtered_data if t.get('balance') is not None]
+        balance_transactions.sort(key=lambda x: x['date'] if isinstance(x['date'], datetime) else datetime.fromisoformat(x['date']))
+        
+        if not balance_transactions:
+            raise ValueError("No balance data available")
+        
+        # Calculate opening balance: the balance field is an end-of-day value,
+        # so we must subtract ALL transactions up to and including the first
+        # balance transaction, not just its own amount.
+        sorted_all = sorted(filtered_data, key=lambda x: x['date'] if isinstance(x['date'], datetime) else datetime.fromisoformat(x['date']))
+        first_balance_txn = balance_transactions[0]
+        idx = sorted_all.index(first_balance_txn)
+        cumulative = sum(t['amount'] for t in sorted_all[:idx + 1])
+        base_opening_balance = first_balance_txn['balance'] - cumulative
+        
+        # Adjust for transactions before window
+        transactions_before = []
+        for t in filtered_data:
+            txn_date = t['date'] if isinstance(t['date'], datetime) else datetime.fromisoformat(t['date'])
+            if txn_date < window_start:
+                transactions_before.append(t)
+        
+        total_before = sum(t['amount'] for t in transactions_before)
+        opening_balance = base_opening_balance + total_before
+        
+        return windowed_data, opening_balance
+    
+    def _create_aggregated_waterfall_data(self, transactions, opening_balance, aggregation='daily'):
+        """Create aggregated waterfall data for specified period type."""
+        from collections import defaultdict
+        
+        # Group transactions by period
+        periods = defaultdict(lambda: {'income': [], 'expenses': [], 'net_flow': 0})
+        
+        for txn in transactions:
+            # Handle datetime
+            txn_date = txn['date'] if isinstance(txn['date'], datetime) else datetime.fromisoformat(txn['date'])
+            
+            # Determine period key based on aggregation
+            if aggregation == 'daily':
+                period_key = txn_date.strftime('%Y-%m-%d')
+                period_label = txn_date.strftime('%d %b')
+            elif aggregation == 'weekly':
+                # Week starting Monday
+                week_start = txn_date - timedelta(days=txn_date.weekday())
+                period_key = week_start.strftime('%Y-W%U')
+                period_label = f"Week {week_start.strftime('%d %b')}"
+            else:  # monthly
+                period_key = txn_date.strftime('%Y-%m')
+                period_label = txn_date.strftime('%b %Y')
+            
+            # Store transaction details
+            if txn['amount'] > 0:
+                periods[period_key]['income'].append(txn)
+            else:
+                periods[period_key]['expenses'].append(txn)
+            
+            periods[period_key]['net_flow'] += txn['amount']
+            periods[period_key]['period_label'] = period_label
+            periods[period_key]['period_date'] = txn_date
+        
+        # Sort periods chronologically
+        sorted_periods = sorted(periods.items(), key=lambda x: x[1]['period_date'])
+        
+        # Create waterfall segments
+        waterfall_data = {
+            'x': [],  # Period labels
+            'y': [],  # Amounts (opening balance + net flows)
+            'measure': [],  # absolute for opening, relative for changes
+            'text': [],  # Display text
+            'hover_data': [],  # Detailed hover information
+            'connector': {"line": {"color": "rgb(63, 63, 63)"}},
+            'increasing': {"marker": {"color": "green"}},
+            'decreasing': {"marker": {"color": "red"}},
+            'totals': {"marker": {"color": "blue"}}
+        }
+        
+        # Opening balance
+        waterfall_data['x'].append('Opening Balance')
+        waterfall_data['y'].append(opening_balance)
+        waterfall_data['measure'].append('absolute')
+        waterfall_data['text'].append(f"{self.currency_symbol}{opening_balance:,.2f}")
+        waterfall_data['hover_data'].append(f"Opening Balance: {self.currency_symbol}{opening_balance:,.2f}")
+        
+        # Add each period's net flow
+        for period_key, period_data in sorted_periods:
+            if period_data['net_flow'] == 0:
+                continue  # Skip periods with no net change
+                
+            waterfall_data['x'].append(period_data['period_label'])
+            waterfall_data['y'].append(period_data['net_flow'])
+            waterfall_data['measure'].append('relative')
+            
+            # Format text
+            net_flow = period_data['net_flow']
+            text = f"{self.currency_symbol}{net_flow:+,.2f}"
+            waterfall_data['text'].append(text)
+            
+            # Create detailed hover info
+            income_count = len(period_data['income'])
+            expense_count = len(period_data['expenses'])
+            income_total = sum(t['amount'] for t in period_data['income'])
+            expense_total = sum(abs(t['amount']) for t in period_data['expenses'])
+            
+            hover_info = f"""<b>{period_data['period_label']}</b><br>
+Net Flow: {self.currency_symbol}{net_flow:+,.2f}<br>
+Income: {income_count} transactions ({self.currency_symbol}{income_total:,.2f})<br>
+Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2f})"""
+            
+            # Add top transactions for this period
+            all_period_txns = period_data['income'] + period_data['expenses']
+            top_txns = sorted(all_period_txns, key=lambda x: abs(x['amount']), reverse=True)[:3]
+            
+            if top_txns:
+                hover_info += "<br><br>Top Transactions:"
+                for txn in top_txns:
+                    hover_info += f"<br>• {txn['description'][:30]}... {self.currency_symbol}{txn['amount']:+.2f}"
+            
+            waterfall_data['hover_data'].append(hover_info)
+        
+        # Add closing balance (total)
+        total_net_flow = sum(period_data['net_flow'] for _, period_data in sorted_periods if period_data['net_flow'] != 0)
+        closing_balance = opening_balance + total_net_flow
+        
+        # Find the latest transaction's actual balance for validation (if available)
+        latest_balance = None
+        if transactions:
+            # Sort transactions by date to find the latest one with balance data
+            sorted_txns = sorted(transactions, key=lambda x: x['date'] if isinstance(x['date'], datetime) else datetime.fromisoformat(x['date']))
+            for txn in reversed(sorted_txns):
+                if txn.get('balance') is not None and txn.get('balance') != 0:
+                    latest_balance = txn['balance']
+                    break
+        
+        waterfall_data['x'].append('Closing Balance')
+        waterfall_data['y'].append(closing_balance)
+        waterfall_data['measure'].append('total')
+        waterfall_data['text'].append(f"{self.currency_symbol}{closing_balance:,.2f}")
+        
+        # Enhanced hover with validation info
+        hover_info = f"Closing Balance: {self.currency_symbol}{closing_balance:,.2f}<br>Net Change: {self.currency_symbol}{total_net_flow:+,.2f}"
+        if latest_balance is not None:
+            balance_diff = abs(closing_balance - latest_balance)
+            if balance_diff < 0.01:
+                hover_info += f"<br>✅ Validated against latest transaction balance"
+            else:
+                hover_info += f"<br>⚠️ Differs from latest balance: {self.currency_symbol}{latest_balance:,.2f}"
+        waterfall_data['hover_data'].append(hover_info)
+        
+        return waterfall_data
+    
+    def _build_traditional_waterfall(self, waterfall_data, aggregation='daily'):
+        """Build the traditional waterfall chart with plotly."""
+        fig = go.Figure()
+        
+        # Create waterfall chart
+        fig.add_trace(go.Waterfall(
+            name="Balance Flow",
+            orientation="v",
+            measure=waterfall_data['measure'],
+            x=waterfall_data['x'],
+            y=waterfall_data['y'],
+            text=waterfall_data['text'],
+            textposition="auto",
+            connector=waterfall_data['connector'],
+            increasing=waterfall_data['increasing'],
+            decreasing=waterfall_data['decreasing'],
+            totals=waterfall_data['totals'],
+            hovertemplate="%{customdata}<extra></extra>",
+            customdata=waterfall_data['hover_data']
+        ))
+        
+        # Dynamic title based on aggregation
+        title_map = {
+            'daily': 'Daily Transaction Waterfall - Latest 6 Months',
+            'weekly': 'Weekly Transaction Waterfall - Latest 6 Months', 
+            'monthly': 'Monthly Transaction Waterfall - Latest 6 Months'
+        }
+        
+        # Configure layout
+        fig.update_layout(
+            title=title_map.get(aggregation, 'Transaction Waterfall'),
+            xaxis_title="Period",
+            yaxis_title=f"Amount ({self.currency_symbol})",
+            template='plotly_white',
+            hovermode='x unified',
+            height=600,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            margin=dict(l=60, r=60, t=80, b=100)
+        )
+        
+        # Optimize x-axis for readability
+        if len(waterfall_data['x']) > 15:
+            fig.update_xaxes(tickangle=45)
+        
+        return fig
+    
+    def _create_empty_chart(self, message):
+        """Create empty chart with message."""
+        fig = go.Figure()
+        fig.add_annotation(
+            text=message,
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, xanchor='center', yanchor='middle',
+            showarrow=False, font=dict(size=16)
+        )
+        fig.update_layout(
+            title="Daily Transaction Waterfall",
+            template='plotly_white',
+            height=400
+        )
+        return fig
+    
     def _get_smart_category_suggestions(self, description_lower):
         """Smart category suggestions based on keywords and patterns."""
         
@@ -941,12 +1478,24 @@ class FinancialDashboard:
                     id="sort-date-btn",
                     color="link", 
                     className="text-decoration-none p-0 text-dark fw-bold",
-                    style={"border": "none", "background": "none"}
-                    )
-                ]),
-                html.Th([
-                    dbc.Button([
-                        html.I(className="fas fa-align-left me-1"),
+                     style={"border": "none", "background": "none"}
+                     )
+                 ]),
+                 html.Th([
+                     dbc.Button([
+                         html.I(className="fas fa-credit-card me-1"),
+                         "Payment Method",
+                         html.I(className="fas fa-sort ms-1", style={"opacity": "0.6"})
+                     ], 
+                     id="sort-payment-method-btn",
+                     color="link", 
+                     className="text-decoration-none p-0 text-dark fw-bold",
+                     style={"border": "none", "background": "none"}
+                     )
+                 ]),
+                 html.Th([
+                     dbc.Button([
+                         html.I(className="fas fa-align-left me-1"),
                         "Description",
                         html.I(className="fas fa-sort ms-1", style={"opacity": "0.6"})
                     ], 
@@ -1002,21 +1551,43 @@ class FinancialDashboard:
             else:
                 category_display = html.Strong(category)
             
-            # Truncate long descriptions with tooltip
+            # Truncate long descriptions with tooltip (reduced to 50 chars to accommodate payment method column)
             description = transaction['description']
-            if len(description) > 60:
-                description_display = html.Span(
-                    description[:60] + "...",
-                    title=description  # Full description on hover
+            reference = transaction.get('reference', None)
+            
+            # Build full text for tooltip
+            full_tooltip = description
+            if reference:
+                full_tooltip = f"{description} | {reference}"
+            
+            # Main description (truncate if needed)
+            if len(description) > 50:
+                desc_element = html.Span(
+                    description[:50] + "...",
+                    title=full_tooltip
                 )
             else:
-                description_display = description
+                desc_element = html.Span(description, title=full_tooltip)
+            
+            # Build description display with reference underneath
+            if reference:
+                description_display = html.Div([
+                    desc_element,
+                    html.Br(),
+                    html.Small(reference, className="text-muted")
+                ])
+            else:
+                description_display = desc_element
+            
+            # Get payment method display
+            payment_method_display = self.get_payment_method_display(transaction)
             
             row = html.Tr([
                 html.Td(
                     transaction['date'].strftime('%d %b %Y'),
                     className="text-nowrap"
                 ),
+                html.Td(payment_method_display, className="text-nowrap"),
                 html.Td(description_display),
                 html.Td(category_display),
                 html.Td(amount_str, className=f"{amount_class} text-end text-nowrap")
@@ -1026,6 +1597,53 @@ class FinancialDashboard:
         body = html.Tbody(rows)
         
         return dbc.Table([header, body], striped=True, bordered=True, hover=True, size="sm")
+    
+    def get_payment_method_display(self, transaction) -> str:
+        """Convert payment method code to human-readable format."""
+        # Payment method mappings (from HSBC parser)
+        PAYMENT_METHOD_MEANINGS = {
+            # Payments & transfers
+            'FP': 'Faster Payment', 'FPS': 'Faster Payment Service', 'FPI': 'Faster Payment In',
+            'FPO': 'Faster Payment Out', 'TRF': 'Transfer', 'TFR': 'Transfer', 'BP': 'Bill Payment',
+            'OBP': 'Open Banking Payment', 'IBP': 'Inter-branch Payment', 'ITL': 'International Transfer',
+            'CHAPS': 'Same-day Large Transfer', 'CHP': 'Same-day Large Transfer',
+            
+            # Regular payments
+            'DD': 'Direct Debit', 'DDR': 'Direct Debit Return', 'SO': 'Standing Order', 
+            'STO': 'Standing Order', 'BACS': 'Salary or Business Payment',
+            
+            # Card & retail
+            'POS': 'Card Payment at Shop', 'VIS': 'Visa Transaction', 'MC': 'Mastercard Transaction',
+            ')))': 'Contactless Payment', 'CSH': 'Cash',
+            
+            # Banking operations  
+            'CR': 'Credit', 'DR': 'Debit', 'CHG': 'Charge', 'INT': 'Interest',
+            'ATM': 'Cash Machine', 'DEP': 'Deposit', 'CHQ': 'Cheque'
+        }
+        
+        # Handle both transaction dict and direct payment_method string (backward compatibility)
+        if isinstance(transaction, dict):
+            payment_method = transaction.get('payment_method')
+            description = transaction.get('description', '')
+        else:
+            # If just a string is passed (backward compatibility)
+            payment_method = transaction
+            description = ''
+        
+        # If payment_method is available and not null, use it
+        if payment_method:
+            return PAYMENT_METHOD_MEANINGS.get(payment_method, payment_method)
+        
+        # If payment_method is null/empty, try to extract from description
+        if description:
+            # Split by newlines and check first part for payment method codes
+            desc_parts = description.split('\n')
+            if len(desc_parts) > 1:
+                first_part = desc_parts[0].strip()
+                if first_part in PAYMENT_METHOD_MEANINGS:
+                    return PAYMENT_METHOD_MEANINGS[first_part]
+        
+        return "Unknown"
     
     def create_analytics_tab(self, filtered_data):
         """Create the analytics tab content."""
@@ -1044,6 +1662,9 @@ class FinancialDashboard:
         
         # Subcategory pie chart 
         subcategory_pie_fig = self.create_subcategory_pie_chart(filtered_data)
+        
+        # Daily waterfall chart
+        daily_waterfall_fig = self.create_daily_waterfall_chart(filtered_data)
         
         # Transactions table - sort first, then take top 50 most recent
         # Ensure dates are datetime objects for proper sorting
@@ -1096,6 +1717,31 @@ class FinancialDashboard:
                         ])
                     ])
                 ], width=6),
+            ], className="mb-4"),
+            
+            # Daily waterfall chart - full width
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            dbc.Row([
+                                dbc.Col([
+                                    html.H5("Daily Transaction Waterfall - Latest 6 Months", className="mb-0")
+                                ], width=8),
+                                dbc.Col([
+                                    dbc.ButtonGroup([
+                                        dbc.Button("Daily", id="waterfall-daily-btn", color="primary", size="sm", n_clicks=0),
+                                        dbc.Button("Weekly", id="waterfall-weekly-btn", color="outline-primary", size="sm", n_clicks=0), 
+                                        dbc.Button("Monthly", id="waterfall-monthly-btn", color="outline-primary", size="sm", n_clicks=0)
+                                    ], size="sm", className="float-end")
+                                ], width=4)
+                            ])
+                        ]),
+                        dbc.CardBody([
+                            dcc.Graph(id="daily-waterfall-chart", figure=daily_waterfall_fig)
+                        ])
+                    ])
+                ], width=12),
             ], className="mb-4"),
             
             # Transaction table with search functionality
@@ -1668,6 +2314,358 @@ class FinancialDashboard:
         
         logger.info(f"Starting dashboard at http://{host}:{port}")
         self.app.run(host=host, port=port, debug=debug)
+    
+    def _create_empty_chart(self, message):
+        """Create empty chart with message."""
+        fig = go.Figure()
+        fig.add_annotation(
+            text=message,
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, xanchor='center', yanchor='middle',
+            showarrow=False, font=dict(size=16)
+        )
+        fig.update_layout(
+            title="Daily Transaction Waterfall",
+            template='plotly_white',
+            height=400
+        )
+        return fig
+
+    # -------------------------------------------------------------------------
+    # Recurring & Vendors tab
+    # -------------------------------------------------------------------------
+
+    def _detect_recurring_payments(self, filtered_data: List[Dict]) -> Dict[str, Any]:
+        """
+        Detect recurring payments by grouping on (description, amount).
+
+        Returns dict with keys 'expenses' and 'income', each a list of dicts:
+            vendor, amount, count, avg_interval_days, frequency_label,
+            monthly_cost, annual_cost, last_date, first_date
+        Only includes combos with 3+ occurrences.
+        """
+        # Group transactions by (description, rounded amount)
+        combos: Dict[tuple, list] = {}
+        for t in filtered_data:
+            key = (t['description'], round(t['amount'], 2))
+            combos.setdefault(key, []).append(t)
+
+        results = {'expenses': [], 'income': []}
+
+        for (desc, amount), txns in combos.items():
+            if len(txns) < 3:
+                continue
+
+            # Sort by date and compute intervals
+            sorted_txns = sorted(txns, key=lambda x: x['date'])
+            intervals = []
+            for i in range(1, len(sorted_txns)):
+                d1 = sorted_txns[i - 1]['date']
+                d2 = sorted_txns[i]['date']
+                if isinstance(d1, str):
+                    d1 = datetime.fromisoformat(d1)
+                if isinstance(d2, str):
+                    d2 = datetime.fromisoformat(d2)
+                delta = (d2 - d1).days
+                if delta > 0:
+                    intervals.append(delta)
+
+            avg_interval = sum(intervals) / len(intervals) if intervals else 0
+
+            # Classify frequency
+            if 25 <= avg_interval <= 35:
+                frequency = 'Monthly'
+                monthly_cost = abs(amount)
+            elif 12 <= avg_interval <= 18:
+                frequency = 'Bi-weekly'
+                monthly_cost = abs(amount) * 2
+            elif 5 <= avg_interval <= 9:
+                frequency = 'Weekly'
+                monthly_cost = abs(amount) * (30.44 / 7)
+            else:
+                frequency = 'Irregular'
+                # Estimate monthly cost from total spend / months spanned
+                first_date = sorted_txns[0]['date']
+                last_date = sorted_txns[-1]['date']
+                if isinstance(first_date, str):
+                    first_date = datetime.fromisoformat(first_date)
+                if isinstance(last_date, str):
+                    last_date = datetime.fromisoformat(last_date)
+                months_spanned = max((last_date - first_date).days / 30.44, 1)
+                monthly_cost = abs(amount) * len(txns) / months_spanned
+
+            annual_cost = monthly_cost * 12
+
+            first_date = sorted_txns[0]['date']
+            last_date = sorted_txns[-1]['date']
+            if isinstance(first_date, str):
+                first_date = datetime.fromisoformat(first_date)
+            if isinstance(last_date, str):
+                last_date = datetime.fromisoformat(last_date)
+
+            entry = {
+                'vendor': desc,
+                'amount': amount,
+                'count': len(txns),
+                'avg_interval_days': round(avg_interval, 1),
+                'frequency': frequency,
+                'monthly_cost': round(monthly_cost, 2),
+                'annual_cost': round(annual_cost, 2),
+                'first_date': first_date,
+                'last_date': last_date,
+            }
+
+            if amount < 0:
+                results['expenses'].append(entry)
+            else:
+                results['income'].append(entry)
+
+        # Sort each list by annual cost descending
+        results['expenses'].sort(key=lambda x: x['annual_cost'], reverse=True)
+        results['income'].sort(key=lambda x: x['annual_cost'], reverse=True)
+
+        return results
+
+    def _build_vendor_summary(self, filtered_data: List[Dict]) -> List[Dict]:
+        """
+        Build a summary of all vendors with 2+ transactions.
+
+        Returns list of dicts sorted by count descending:
+            vendor, count, total, average, first_date, last_date, is_income
+        """
+        vendors: Dict[str, list] = {}
+        for t in filtered_data:
+            desc = t['description']
+            vendors.setdefault(desc, []).append(t)
+
+        summary = []
+        for desc, txns in vendors.items():
+            if len(txns) < 2:
+                continue
+
+            amounts = [t['amount'] for t in txns]
+            total = sum(amounts)
+
+            dates = []
+            for t in txns:
+                d = t['date']
+                if isinstance(d, str):
+                    d = datetime.fromisoformat(d)
+                dates.append(d)
+            dates.sort()
+
+            summary.append({
+                'vendor': desc,
+                'count': len(txns),
+                'total': round(total, 2),
+                'average': round(total / len(txns), 2),
+                'first_date': dates[0],
+                'last_date': dates[-1],
+                'is_income': total > 0,
+            })
+
+        summary.sort(key=lambda x: x['count'], reverse=True)
+        return summary
+
+    def _create_recurring_payments_section(self, recurring_data: Dict[str, Any]) -> html.Div:
+        """Render the recurring payments detection section."""
+        sections = []
+
+        # Summary cards
+        total_monthly_expenses = sum(e['monthly_cost'] for e in recurring_data['expenses'])
+        total_monthly_income = sum(e['monthly_cost'] for e in recurring_data['income'])
+        total_annual_expenses = sum(e['annual_cost'] for e in recurring_data['expenses'])
+        total_annual_income = sum(e['annual_cost'] for e in recurring_data['income'])
+
+        summary_cards = dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Monthly Recurring Expenses", className="text-muted mb-1"),
+                html.H4(f"{self.currency_symbol}{total_monthly_expenses:,.2f}", className="text-danger fw-bold"),
+                html.Small(f"{self.currency_symbol}{total_annual_expenses:,.2f} / year", className="text-muted"),
+            ]), className="shadow-sm"), width=3),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Monthly Recurring Income", className="text-muted mb-1"),
+                html.H4(f"{self.currency_symbol}{total_monthly_income:,.2f}", className="text-success fw-bold"),
+                html.Small(f"{self.currency_symbol}{total_annual_income:,.2f} / year", className="text-muted"),
+            ]), className="shadow-sm"), width=3),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Recurring Expense Items", className="text-muted mb-1"),
+                html.H4(f"{len(recurring_data['expenses'])}", className="fw-bold"),
+                html.Small("vendor + amount combos", className="text-muted"),
+            ]), className="shadow-sm"), width=3),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Recurring Income Items", className="text-muted mb-1"),
+                html.H4(f"{len(recurring_data['income'])}", className="fw-bold"),
+                html.Small("vendor + amount combos", className="text-muted"),
+            ]), className="shadow-sm"), width=3),
+        ], className="mb-4")
+        sections.append(summary_cards)
+
+        # Build tables for expenses and income
+        for label, entries, color_class in [
+            ("Recurring Expenses", recurring_data['expenses'], "text-danger"),
+            ("Recurring Income", recurring_data['income'], "text-success"),
+        ]:
+            if not entries:
+                continue
+
+            sections.append(html.H5(label, className="mt-4 mb-3 fw-bold"))
+
+            header = html.Thead(html.Tr([
+                html.Th("Vendor"),
+                html.Th("Amount", className="text-end"),
+                html.Th("Frequency"),
+                html.Th("Occurrences", className="text-center"),
+                html.Th("Monthly Cost", className="text-end"),
+                html.Th("Annual Cost", className="text-end"),
+                html.Th("Last Paid"),
+            ]))
+
+            rows = []
+            for e in entries:
+                # Frequency badge color
+                freq_colors = {
+                    'Monthly': 'primary',
+                    'Bi-weekly': 'info',
+                    'Weekly': 'warning',
+                    'Irregular': 'secondary',
+                }
+                freq_badge = dbc.Badge(
+                    e['frequency'],
+                    color=freq_colors.get(e['frequency'], 'secondary'),
+                    className="px-2 py-1"
+                )
+
+                rows.append(html.Tr([
+                    html.Td(e['vendor']),
+                    html.Td(
+                        f"{self.currency_symbol}{abs(e['amount']):,.2f}",
+                        className=f"{color_class} fw-bold text-end"
+                    ),
+                    html.Td(freq_badge),
+                    html.Td(str(e['count']), className="text-center"),
+                    html.Td(
+                        f"{self.currency_symbol}{e['monthly_cost']:,.2f}",
+                        className="text-end"
+                    ),
+                    html.Td(
+                        f"{self.currency_symbol}{e['annual_cost']:,.2f}",
+                        className="text-end fw-bold"
+                    ),
+                    html.Td(
+                        e['last_date'].strftime('%d %b %Y'),
+                        className="text-nowrap"
+                    ),
+                ]))
+
+            table = dbc.Table(
+                [header, html.Tbody(rows)],
+                striped=True, bordered=True, hover=True, size="sm",
+                className="mb-4"
+            )
+            sections.append(table)
+
+        if not recurring_data['expenses'] and not recurring_data['income']:
+            sections.append(html.P(
+                "No recurring payments detected (need 3+ occurrences of same vendor + amount).",
+                className="text-muted"
+            ))
+
+        return html.Div(sections)
+
+    def _create_vendor_summary_section(self, vendor_data: List[Dict]) -> html.Div:
+        """Render the top vendors summary table."""
+        if not vendor_data:
+            return html.P("No vendors with 2+ transactions found.", className="text-muted")
+
+        header = html.Thead(html.Tr([
+            html.Th("#", className="text-center"),
+            html.Th("Vendor"),
+            html.Th("Transactions", className="text-center"),
+            html.Th("Total", className="text-end"),
+            html.Th("Average", className="text-end"),
+            html.Th("First Seen"),
+            html.Th("Last Seen"),
+        ]))
+
+        rows = []
+        for rank, v in enumerate(vendor_data, 1):
+            color_class = "text-success" if v['is_income'] else "text-danger"
+
+            rows.append(html.Tr([
+                html.Td(str(rank), className="text-center text-muted"),
+                html.Td(v['vendor'], className="fw-bold"),
+                html.Td(str(v['count']), className="text-center"),
+                html.Td(
+                    f"{self.currency_symbol}{abs(v['total']):,.2f}",
+                    className=f"{color_class} fw-bold text-end"
+                ),
+                html.Td(
+                    f"{self.currency_symbol}{abs(v['average']):,.2f}",
+                    className=f"{color_class} text-end"
+                ),
+                html.Td(
+                    v['first_date'].strftime('%d %b %Y'),
+                    className="text-nowrap"
+                ),
+                html.Td(
+                    v['last_date'].strftime('%d %b %Y'),
+                    className="text-nowrap"
+                ),
+            ]))
+
+        table = dbc.Table(
+            [header, html.Tbody(rows)],
+            striped=True, bordered=True, hover=True, size="sm"
+        )
+
+        return html.Div([
+            html.Div(
+                table,
+                style={"maxHeight": "600px", "overflowY": "auto"}
+            )
+        ])
+
+    def create_recurring_vendors_tab(self, filtered_data: List[Dict]) -> html.Div:
+        """Create the Recurring & Vendors tab content."""
+        if not filtered_data:
+            return html.Div(html.P("No transaction data available."))
+
+        # Compute data
+        recurring_data = self._detect_recurring_payments(filtered_data)
+        vendor_data = self._build_vendor_summary(filtered_data)
+
+        # Build layout
+        return html.Div([
+            # Section 1: Recurring Payments
+            dbc.Card([
+                dbc.CardHeader(html.H5(
+                    "Recurring Payments",
+                    className="mb-0 fw-bold"
+                )),
+                dbc.CardBody(
+                    self._create_recurring_payments_section(recurring_data)
+                ),
+            ], className="shadow-sm mb-4"),
+
+            # Section 2: Top Vendors
+            dbc.Card([
+                dbc.CardHeader(html.H5(
+                    [
+                        "Top Vendors",
+                        dbc.Badge(
+                            f"{len(vendor_data)} vendors",
+                            color="secondary",
+                            className="ms-2"
+                        ),
+                    ],
+                    className="mb-0 fw-bold"
+                )),
+                dbc.CardBody(
+                    self._create_vendor_summary_section(vendor_data)
+                ),
+            ], className="shadow-sm mb-4"),
+        ])
 
 
 # Global dashboard instance

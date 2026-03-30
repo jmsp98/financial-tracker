@@ -40,8 +40,13 @@ def process_pdf_file(pdf_path: str, extractor: PDFExtractor) -> dict:
         bank_type = ParserFactory.detect_bank(text)
         logger.info(f"Detected bank: {bank_type}")
         
-        # Parse transactions
-        all_transactions = parser.parse_transactions(text)
+        # Parse transactions - use PDF parsing for HSBC enhanced parser
+        if bank_type == 'hsbc' and hasattr(parser, 'parse_pdf'):
+            logger.info(f"Using enhanced PDF parsing for {bank_type}")
+            all_transactions = parser.parse_pdf(pdf_path)
+        else:
+            logger.info(f"Using text-based parsing for {bank_type}")
+            all_transactions = parser.parse_transactions(text)
         
         # Convert to dict format
         transaction_dicts = []
@@ -50,7 +55,7 @@ def process_pdf_file(pdf_path: str, extractor: PDFExtractor) -> dict:
                 'date': txn.date.isoformat(),
                 'description': txn.description,
                 'amount': txn.amount,
-                'balance': txn.balance if txn.balance is not None else 0.0,
+                'balance': txn.balance,  # Preserve None/null values for transactions without balance data
                 'type': txn.transaction_type,
                 'currency_symbol': currency_info['symbol'],  # Add detected currency
                 'currency_code': currency_info['iso_code']
@@ -63,6 +68,8 @@ def process_pdf_file(pdf_path: str, extractor: PDFExtractor) -> dict:
                 transaction_dict['merchant'] = txn.merchant
             if hasattr(txn, 'location') and txn.location:
                 transaction_dict['location'] = txn.location
+            if hasattr(txn, 'reference') and txn.reference:
+                transaction_dict['reference'] = txn.reference
                 
             transaction_dicts.append(transaction_dict)
         

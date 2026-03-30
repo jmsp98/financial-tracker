@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Advanced HSBC parser using ML-enhanced table extraction.
+Advanced HSBC parser using pdfplumber word-level extraction.
 
-This parser uses Camelot's 'stream' method which achieves 100% accuracy
-on HSBC transaction tables, completely eliminating header/footer contamination
-by working with properly structured table data.
+This parser extracts words from PDF pages with their x/y coordinates,
+then assigns each word to the correct column (Date, Payment Type, Details,
+Paid Out, Paid In, Balance) based on fixed x-position boundaries that are
+consistent across all HSBC statement pages.
 """
 
-import camelot
-import pandas as pd
+import pdfplumber
 import re
 import logging
+from collections import defaultdict
 from datetime import datetime
-from typing import List, Optional, Dict, Tuple
-from pathlib import Path
+from typing import List, Optional, Tuple
 
 from .base_parser import BaseBankParser, Transaction
 
@@ -83,7 +83,7 @@ PAYMENT_METHOD_MEANINGS = {
     'DEB': 'Debit Card Payment',
 }
 
-# Payment Method Categories (Updated)
+# Payment Method Categories
 PAYMENT_CATEGORIES = {
     'Faster Payments': ['FP', 'FPS', 'FPI', 'FPO'],
     'Transfers': ['TRF', 'TFR', 'IBP', 'ITL', 'CHAPS', 'CHP'],
@@ -97,16 +97,28 @@ PAYMENT_CATEGORIES = {
     'Traditional': ['CHQ', 'FEE', 'MSC']
 }
 
+# HSBC statement column boundaries (x-coordinates in points).
+# Verified identical across all 6 PDFs, all pages (within ±1pt).
+# Amount columns are right-aligned; ranges derived from actual word positions:
+#   Paid Out: left 354.8-376.1, right 386.8-390.1
+#   Paid In:  left 438.5-458.0, right 470.1-472.0
+#   Balance:  left 504.8-545.3, right 542.6-557.3
+# Gaps between columns: PaidOut-PaidIn = 48pt, PaidIn-Balance = 33pt.
+COL_DATE_MAX_X = 110       # Date column: x0 < 110
+COL_DESC_MIN_X = 110       # Description (payment type + details): 110 <= x0 < 340
+COL_DESC_MAX_X = 340
+COL_PAID_OUT_MIN_X = 340   # Paid out: 340 <= x0 < 410
+COL_PAID_OUT_MAX_X = 410
+COL_PAID_IN_MIN_X = 410    # Paid in: 410 <= x0 < 490
+COL_PAID_IN_MAX_X = 490
+COL_BALANCE_MIN_X = 490    # Balance: x0 >= 490
+
 
 class AdvancedHSBCParser(BaseBankParser):
     """
-    Advanced HSBC parser using ML-enhanced table extraction.
-    
-    Key advantages:
-    1. Uses Camelot 'stream' method with 100% table accuracy
-    2. Eliminates header/footer contamination by working with structured tables
-    3. Proper column-aware parsing (Date|Details, £Paid out, £Paid in, £Balance)
-    4. Leverages HSBC's consistent table structure across all statements
+    HSBC parser using pdfplumber word-level extraction with x-position
+    column assignment. Includes balance validation against end-of-day
+    balance values from the statement.
     """
     
     def get_bank_name(self) -> str:
@@ -135,520 +147,547 @@ class AdvancedHSBCParser(BaseBankParser):
     
     def parse_transactions_from_text(self, text: str) -> List[Transaction]:
         """
-        This parser doesn't use text parsing - it extracts structured tables.
-        Text parsing is the source of contamination issues.
+        This parser uses direct PDF word extraction, not text parsing.
         """
-        logger.warning("AdvancedHSBCParser uses table extraction, not text parsing. Use parse_transactions_from_pdf() instead.")
+        logger.warning("AdvancedHSBCParser uses PDF word extraction. Use parse_transactions_from_pdf() instead.")
+        return []
+    
+    def parse_transactions_from_table(self, tables: List[List[List[str]]]) -> List[Transaction]:
+        """Not used -- this parser extracts directly from PDF."""
         return []
     
     def parse_transactions_from_pdf(self, pdf_path: str) -> List[Transaction]:
         """
-        Parse transactions directly from PDF using ML-enhanced table extraction.
+        Parse transactions from PDF using pdfplumber word extraction.
+        
+        Each word's x-coordinate determines which column it belongs to:
+        Date, Payment Type, Details, Paid Out, Paid In, or Balance.
         """
-        logger.info(f"Parsing HSBC PDF with advanced table extraction: {pdf_path}")
+        logger.info(f"Parsing HSBC PDF with pdfplumber word extraction: {pdf_path}")
         
         try:
-            # Extract tables using Camelot stream method (100% accuracy on HSBC)
-            tables = camelot.read_pdf(str(pdf_path), flavor='stream', pages='all')
-            logger.info(f"Camelot extracted {len(tables)} tables from PDF")
+            # Step 1: Extract structured rows from all pages
+            structured_rows = self._extract_rows_from_pdf(pdf_path)
+            logger.info(f"Extracted {len(structured_rows)} structured rows from PDF")
             
-            all_transactions = []
-            global_current_date = None  # Maintain date context across all tables
+            # Step 2: Group rows into transactions
+            transaction_groups = self._group_rows_into_transactions(structured_rows)
+            logger.info(f"Grouped into {len(transaction_groups)} transaction groups")
             
-            # Find and process transaction tables
-            for i, table in enumerate(tables):
-                if self._is_transaction_table(table):
-                    logger.info(f"Processing transaction table {i+1}: {table.shape[0]}x{table.shape[1]} (accuracy: {table.parsing_report.get('accuracy', 0):.2f})")
-                    
-                    transactions = self._parse_transaction_table(table, global_current_date)
-                    all_transactions.extend(transactions)
-                    
-                    # Update global date context from the last transaction parsed
-                    if transactions:
-                        global_current_date = transactions[-1].date
-                    
-                    logger.info(f"  Extracted {len(transactions)} transactions from table {i+1}")
+            # Step 3: Parse each group into a Transaction
+            transactions = []
+            current_date = None
+            for group in transaction_groups:
+                # Even for skipped groups (e.g. BALANCE BROUGHT FORWARD),
+                # preserve any date for subsequent dateless transactions
+                for row in group:
+                    if row['date'].strip():
+                        parsed = self._parse_hsbc_date(row['date'].strip())
+                        if parsed:
+                            current_date = parsed
+                
+                txn = self._parse_transaction_from_rows(group, current_date)
+                if txn:
+                    transactions.append(txn)
+                    current_date = txn.date
             
-            # Sort by date and validate
-            all_transactions.sort(key=lambda x: x.date)
-            valid_transactions = [txn for txn in all_transactions if self.validate_transaction(txn)]
+            # Step 4: Validate with balance data
+            transactions = self._validate_balances(transactions, structured_rows)
             
-            logger.info(f"Advanced HSBC parser extracted {len(valid_transactions)} valid transactions")
-            if valid_transactions:
-                date_range = f"{valid_transactions[0].date.date()} to {valid_transactions[-1].date.date()}"
-                logger.info(f"Date range: {date_range}")
+            # Sort and filter valid
+            transactions.sort(key=lambda x: x.date)
+            valid = [t for t in transactions if self.validate_transaction(t)]
             
-            return valid_transactions
+            logger.info(f"Advanced HSBC parser extracted {len(valid)} valid transactions")
+            if valid:
+                logger.info(f"Date range: {valid[0].date.date()} to {valid[-1].date.date()}")
+            
+            return valid
             
         except Exception as e:
             logger.error(f"Error in advanced HSBC parsing: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
-    def _is_transaction_table(self, table) -> bool:
+    # -------------------------------------------------------------------------
+    # Step 1: Extract structured rows from PDF
+    # -------------------------------------------------------------------------
+    
+    def _extract_rows_from_pdf(self, pdf_path: str) -> List[dict]:
         """
-        Identify if a table contains HSBC transaction data.
+        Extract words from each page, group by y-position into rows,
+        assign each word to a column by x-position.
+        
+        Payment type codes and merchant/detail text share the same visual
+        column (110-340 x range), so they are captured together as
+        'description'. The payment code is extracted in post-processing.
+        
+        Returns a list of row dicts:
+        {
+            'date': str,           # Date text (e.g. "05 Dec 25")
+            'description': str,    # Combined payment type + details text
+            'paid_out': str,       # Amount string or empty
+            'paid_in': str,        # Amount string or empty
+            'balance': str,        # Balance amount string or empty
+            'page': int,           # Page number (1-indexed)
+            'y': float,            # Y position for ordering
+        }
         """
-        df = table.df
+        all_rows = []
         
-        # Check table dimensions (transaction tables have 4 or 5 columns and multiple rows)
-        if df.shape[1] < 4 or df.shape[0] < 5:
-            return False
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages):
+                words = page.extract_words(
+                    keep_blank_chars=True,
+                    x_tolerance=2,
+                    y_tolerance=2
+                )
+                
+                if not words:
+                    continue
+                
+                # Group words by y-position (within 5pt tolerance)
+                y_groups = defaultdict(list)
+                for w in words:
+                    y_key = round(w['top'] / 5) * 5
+                    y_groups[y_key].append(w)
+                
+                # Process each row
+                for y_key in sorted(y_groups.keys()):
+                    row_words = sorted(y_groups[y_key], key=lambda w: w['x0'])
+                    
+                    # Assign words to columns based on x-position
+                    date_parts = []
+                    desc_parts = []
+                    paid_out_parts = []
+                    paid_in_parts = []
+                    balance_parts = []
+                    
+                    for w in row_words:
+                        x0 = w['x0']
+                        text = w['text'].strip()
+                        if not text:
+                            continue
+                        
+                        if x0 < COL_DATE_MAX_X:
+                            date_parts.append(text)
+                        elif x0 < COL_DESC_MAX_X:
+                            desc_parts.append(text)
+                        elif x0 < COL_PAID_OUT_MAX_X:
+                            paid_out_parts.append(text)
+                        elif x0 < COL_PAID_IN_MAX_X:
+                            paid_in_parts.append(text)
+                        else:  # x0 >= COL_BALANCE_MIN_X
+                            balance_parts.append(text)
+                    
+                    # Skip completely empty rows
+                    if not any([date_parts, desc_parts,
+                                paid_out_parts, paid_in_parts, balance_parts]):
+                        continue
+                    
+                    row = {
+                        'date': ' '.join(date_parts),
+                        'description': ' '.join(desc_parts),
+                        'paid_out': ' '.join(paid_out_parts),
+                        'paid_in': ' '.join(paid_in_parts),
+                        'balance': ' '.join(balance_parts),
+                        'page': page_num + 1,
+                        'y': y_key,
+                    }
+                    
+                    # Only keep rows that are part of the transaction table area
+                    if self._is_transaction_row(row):
+                        all_rows.append(row)
         
-        # Check for BALANCE BROUGHT FORWARD (strong indicator of transaction table)
-        table_text = df.to_string()
-        if 'BALANCE BROUGHT FORWARD' in table_text:
+        return all_rows
+    
+    def _is_transaction_row(self, row: dict) -> bool:
+        """
+        Check if a row belongs to the transaction table.
+        Filters out header/footer/address/info content.
+        """
+        desc = row['description'].strip()
+        all_text = f"{row['date']} {desc} {row['paid_out']} {row['paid_in']} {row['balance']}"
+        
+        has_date = bool(row['date'].strip())
+        has_desc = bool(desc)
+        has_amount = bool(row['paid_out'].strip() or row['paid_in'].strip())
+        has_balance = bool(row['balance'].strip())
+        
+        # BALANCE BROUGHT/CARRIED FORWARD rows -- always keep
+        if 'BALANCE' in all_text.upper() and ('BROUGHT' in all_text.upper() or 'CARRIED' in all_text.upper()):
             return True
         
-        # Look for HSBC transaction table headers in any of the first few rows
-        for row_idx in range(min(3, len(df))):
-            header_text = ' '.join(str(cell) for cell in df.iloc[row_idx] if pd.notna(cell))
-            
-            required_headers = ['Date', 'Pay', 'Paid out', 'Paid in', 'Balance']
-            header_matches = sum(1 for header in required_headers if header in header_text)
-            
-            # If we find good headers, continue checking
-            if header_matches >= 3:
-                # Check for transaction patterns (dates + payment methods)
-                has_dates = any(self._looks_like_transaction_date(str(cell)) for cell in df.iloc[:, 0] if pd.notna(cell))
-                has_payment_methods = any(self._looks_like_payment_method(str(cell)) for row in df.itertuples() for cell in row if pd.notna(cell))
-                
-                return has_dates and has_payment_methods
+        # Rows with a date plus any other content
+        if has_date and (has_desc or has_amount or has_balance):
+            return True
+        
+        # Rows with description plus financial data
+        if has_desc and (has_amount or has_balance):
+            return True
+        
+        # Continuation rows: description only (location, reference, etc.)
+        if has_desc and not has_date:
+            # Skip known non-transaction content (exact substring match)
+            skip_phrases = [
+                'Contact tel', 'see reverse', 'Text phone', 'www.hsbc',
+                'Your Statement', 'Account Nam', 'used by deaf',
+                'Your Bank Account', 'Payment type and details',
+                'Pay m e nt', 't y pe and de t ails',
+                'Sortcode', 'Sheet Num', 'S ortco de', 'S he e t',
+                'Acco unt Num', 'Interest and Charges', 'Business Banking',
+                'Personal Banking', 'Credit Interest', 'Overdraft interest',
+                'individual price', 'apply interest', 'Details of our',
+                'accrues during',
+            ]
+            desc_lower = desc.lower()
+            if any(pat.lower() in desc_lower for pat in skip_phrases):
+                return False
+            # Skip standalone month names / header words (word-boundary match)
+            # Only skip if the ENTIRE description is just a month or "details"
+            standalone_skip = {
+                'december', 'january', 'february', 'march', 'april',
+                'may', 'june', 'july', 'august', 'september',
+                'october', 'november', 'details',
+            }
+            if desc_lower in standalone_skip:
+                return False
+            return True
         
         return False
     
-    def _looks_like_transaction_date(self, text: str) -> bool:
-        """Check if text looks like a transaction date."""
-        if pd.isna(text) or not isinstance(text, str):
-            return False
-        
-        # HSBC date patterns: "05 Feb 26" or "5 Feb 26" 
-        date_patterns = [
-            r'\d{1,2}\s+[A-Za-z]{3}\s+\d{2}',  # "05 Feb 26"
-            r'\d{1,2}/\d{1,2}/\d{2,4}',        # "05/02/26"
-            r'\d{4}-\d{2}-\d{2}'               # "2026-02-05"
-        ]
-        
-        return any(re.search(pattern, text) for pattern in date_patterns)
+    # -------------------------------------------------------------------------
+    # Step 2: Group rows into transactions
+    # -------------------------------------------------------------------------
     
-    def _looks_like_payment_method(self, text: str) -> bool:
-        """Check if text contains HSBC payment method indicators."""
-        if pd.isna(text) or not isinstance(text, str):
-            return False
-        
-        # Get all payment method codes from our comprehensive list
-        payment_methods = list(PAYMENT_METHOD_MEANINGS.keys())
-        text_upper = text.upper()
-        
-        # More precise matching - look for payment methods as standalone tokens or at line start
-        for method in payment_methods:
-            # Check if method appears at start of text, after newline, or as standalone word
-            if (text_upper.startswith(method + ' ') or 
-                text_upper.startswith(method + '\n') or
-                f'\n{method}\n' in text_upper or 
-                f'\n{method} ' in text_upper or
-                text_upper == method):
-                return True
-        
-        return False
-    
-    def _parse_transaction_table(self, table, global_current_date: Optional[datetime] = None) -> List[Transaction]:
+    def _group_rows_into_transactions(self, rows: List[dict]) -> List[List[dict]]:
         """
-        Parse transactions from a structured HSBC transaction table.
-        """
-        df = table.df
-        transactions = []
-        
-        # Find the header row (contains "Date", "Paid out", etc.)
-        header_row_idx = self._find_header_row(df)
-        if header_row_idx == -1:
-            logger.warning("Could not find header row in transaction table")
-            return []
-        
-        logger.info(f"Found header row at index {header_row_idx}")
-        
-        # Parse transactions starting after header
-        data_start = header_row_idx + 1
-        current_date = None
-        
-        # Group rows into complete transactions
-        transaction_groups = self._group_transaction_rows(df, data_start)
-        
-        current_date = global_current_date  # Start with global date context from previous tables
-        
-        for group in transaction_groups:
-            transaction = self._parse_transaction_group(group, current_date)
-            if transaction:
-                transactions.append(transaction)
-                # Update current date context for next transaction
-                current_date = transaction.date
-        
-        return transactions
-    
-    def _find_header_row(self, df: pd.DataFrame) -> int:
-        """Find the row containing column headers."""
-        for idx in range(min(5, len(df))):  # Check first 5 rows
-            row_text = ' '.join(str(cell) for cell in df.iloc[idx] if pd.notna(cell))
-            
-            # Look for header keywords
-            header_keywords = ['Date', 'Payment', 'Paid out', 'Paid in', 'Balance']
-            matches = sum(1 for keyword in header_keywords if keyword in row_text)
-            
-            if matches >= 3:  # Need at least 3 header keywords
-                return idx
-        
-        return -1
-    
-    def _is_page_boundary_row(self, row_text: str) -> bool:
-        """Check if row contains page boundary content (not transaction data)."""
-        boundary_indicators = [
-            'BALANCE BROUGHT FORWARD',
-            'BALANCE CARRIED FORWARD', 
-            'Contact tel',
-            'www.hsbc.co.uk',
-            'Your Statement',
-            'see reverse for call times',
-            'Text phone',
-            'used by deaf or speech impaired'
-        ]
-        
-        row_upper = row_text.upper()
-        return any(indicator.upper() in row_upper for indicator in boundary_indicators)
-    
-    def _group_transaction_rows(self, df: pd.DataFrame, start_idx: int) -> List[List]:
-        """
-        Group table rows into complete transactions.
-        
-        HSBC actual pattern:
-        - Multiple transactions per day, only first transaction shows date
-        - Transaction 1: "05 Jan 26\nVIS\nSAMPLE MERCHANT 2586" + "LOCATION 87.41"
-        - Transaction 2: ")))\nSAMPLE STORE 2066" + "CITY 8.03" (same day, no date)
-        - Transaction 3: ")))\nSAMPLE LOCATION LT" + "CITY 13.00" (same day, no date)
+        Group structured rows into transaction groups.
         
         A new transaction starts when we see:
-        1. Date pattern (e.g., "05 Jan 26") - always starts new transaction
-        2. Payment method pattern (VIS, ))), DD, etc.) - starts new transaction 
-        3. BALANCE BROUGHT/CARRIED FORWARD - special case
+        1. A date in the date column
+        2. A payment method code in the payment_type column
+        3. A BALANCE BROUGHT/CARRIED FORWARD indicator
+        
+        Continuation rows (location, reference) belong to the preceding transaction.
         """
         groups = []
+        i = 0
         
-        i = start_idx
-        while i < len(df):
-            row = df.iloc[i]
-            col_0 = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ""
-            
-            # Skip empty rows
-            if all(pd.isna(cell) or str(cell).strip() == '' for cell in row):
-                i += 1
-                continue
+        while i < len(rows):
+            row = rows[i]
             
             # Check if this starts a new transaction
-            has_date = self._looks_like_transaction_date(col_0)
-            has_payment_method = self._looks_like_payment_method(col_0)
-            is_balance_forward = ('BALANCE BROUGHT FORWARD' in col_0 or 
-                                'BALANCE CARRIED FORWARD' in col_0)
+            is_new = self._is_transaction_start(row)
             
-            # New transaction starts with date, payment method, or balance forward
-            is_new_transaction = has_date or has_payment_method or is_balance_forward
-            
-            if is_new_transaction:
-                current_group = [(i, row)]
+            if is_new:
+                current_group = [row]
                 
-                # Collect all following rows until we hit another transaction start
+                # Collect continuation rows
                 j = i + 1
-                while j < len(df):
-                    next_row = df.iloc[j]
-                    next_col_0 = str(next_row.iloc[0]) if pd.notna(next_row.iloc[0]) else ""
-                    
-                    # Stop if we hit empty row
-                    if all(pd.isna(cell) or str(cell).strip() == '' for cell in next_row):
+                while j < len(rows):
+                    next_row = rows[j]
+                    if self._is_transaction_start(next_row):
                         break
-                    
-                    # Stop if next row starts a new transaction
-                    next_has_date = self._looks_like_transaction_date(next_col_0)
-                    next_has_payment = self._looks_like_payment_method(next_col_0)
-                    next_is_balance = ('BALANCE BROUGHT FORWARD' in next_col_0 or 
-                                     'BALANCE CARRIED FORWARD' in next_col_0)
-                    
-                    if next_has_date or next_has_payment or next_is_balance:
-                        break
-                    
-                    # This row is part of current transaction
-                    current_group.append((j, next_row))
+                    current_group.append(next_row)
                     j += 1
                 
                 groups.append(current_group)
-                i = j  # Continue from where we stopped
+                i = j
             else:
-                # This row doesn't start a transaction - should be rare, skip it
+                # Orphaned continuation row -- skip
                 i += 1
         
         return groups
     
-    def _parse_transaction_group(self, group: List, current_date: Optional[datetime] = None) -> Optional[Transaction]:
-        """
-        Parse a complete transaction from a group of rows.
+    def _is_transaction_start(self, row: dict) -> bool:
+        """Check if a row starts a new transaction."""
+        desc = row['description'].strip()
+        all_text = f"{row['date']} {desc}"
         
-        Standard HSBC 2-row pattern:
-        Row 1: "05 Jan 26\nVIS\nSAMPLE MERCHANT 2586" | ""    | ""    | ""
-        Row 2: "CITY"                             | 87.41 | ""    | 1948.15
+        # BALANCE BROUGHT/CARRIED FORWARD
+        if 'BALANCE' in all_text.upper() and ('BROUGHT' in all_text.upper() or 'CARRIED' in all_text.upper()):
+            return True
+        
+        # Has a date
+        if row['date'].strip() and self._looks_like_transaction_date(row['date'].strip()):
+            return True
+        
+        # Description starts with a payment method code
+        if desc and self._desc_starts_with_payment_code(desc):
+            return True
+        
+        return False
+    
+    def _desc_starts_with_payment_code(self, desc: str) -> bool:
+        """Check if description text starts with a known payment method code."""
+        if not desc:
+            return False
+        if desc.startswith(')))'):
+            return True
+        first_word = desc.split()[0] if desc.split() else ''
+        if first_word.upper() in PAYMENT_METHOD_MEANINGS:
+            return True
+        return False
+    
+    def _extract_payment_code(self, desc: str) -> Tuple[str, str]:
+        """
+        Extract leading payment method code from description text.
+        
+        Returns (payment_code, remaining_description).
+        E.g. "DD AMERICAN EXPRESS" -> ("DD", "AMERICAN EXPRESS")
+             "))) TESCO STORES 6292" -> (")))", "TESCO STORES 6292")
+             "LONDON" -> ("", "LONDON")
+        """
+        if not desc:
+            return ('', '')
+        
+        # Handle ))) contactless prefix
+        if desc.startswith(')))'):
+            remaining = desc[3:].strip()
+            return (')))', remaining)
+        
+        parts = desc.split(None, 1)
+        first_word = parts[0] if parts else ''
+        rest = parts[1] if len(parts) > 1 else ''
+        
+        if first_word.upper() in PAYMENT_METHOD_MEANINGS:
+            return (first_word, rest)
+        
+        return ('', desc)
+    
+    # -------------------------------------------------------------------------
+    # Step 3: Parse transaction groups into Transaction objects
+    # -------------------------------------------------------------------------
+    
+    def _parse_transaction_from_rows(self, group: List[dict], current_date: Optional[datetime]) -> Optional[Transaction]:
+        """
+        Parse a transaction group (1-3 rows) into a Transaction object.
+        
+        Row structure from HSBC statements:
+        - Row 1: date (if first txn of day), payment_type + merchant name in description
+        - Row 2: location/reference in description, paid_out or paid_in, balance (if last txn of day)
+        - Row 3 (rare): additional reference info
         """
         if not group:
             return None
         
-        try:
-            # Extract data from all rows in the group
-            description_parts = []
-            amounts_paid_out = []
-            amounts_paid_in = []
-            balances = []
-            
-            for idx, row in group:
-                col_0 = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ""
-                col_1 = str(row.iloc[1]) if pd.notna(row.iloc[1]) else ""
-                col_2 = str(row.iloc[2]) if pd.notna(row.iloc[2]) else ""
-                col_3 = str(row.iloc[3]) if pd.notna(row.iloc[3]) else ""
-                
-                if col_0.strip():
-                    description_parts.append(col_0.strip())
-                
-                # Collect amounts
-                paid_out = self._parse_amount(col_1)
-                paid_in = self._parse_amount(col_2)
-                balance = self._parse_amount(col_3)
-                
-                if paid_out:
-                    amounts_paid_out.append(paid_out)
-                if paid_in:
-                    amounts_paid_in.append(paid_in)
-                if balance:
-                    balances.append(balance)
-            
-            # Skip balance-only entries
-            full_description = ' '.join(description_parts)
-            if self._is_page_boundary_row(full_description):
-                return None
-            
-            if not description_parts:
-                return None
-            
-            # Parse the first part (contains date and/or payment method)
-            first_part = description_parts[0]
-            transaction_date, payment_method = self._parse_date_and_payment_method(first_part)
-            
-            # If no date found in transaction, use the current date context
-            if not transaction_date and current_date:
-                transaction_date = current_date
-                # For transactions without dates, extract payment method directly
-                payment_method = self._extract_payment_method_from_text(first_part)
-            
-            # Skip if still no date (shouldn't happen with proper context passing)
-            if not transaction_date:
-                logger.warning(f"No date found for transaction: {first_part[:50]}")
-                return None
-            
-            # Build clean description
-            if len(group) == 2:
-                # Standard 2-row transaction: merchant from first row, location from second row
-                merchant_description = self._extract_merchant_from_first_row(first_part, payment_method)
-                location = description_parts[1] if len(description_parts) > 1 else ""
-                clean_description = f"{merchant_description} {location}".strip()
-            else:
-                # Single row or unusual pattern - combine all parts
-                remaining_parts = ' '.join(description_parts[1:]) if len(description_parts) > 1 else ""
-                merchant_description = self._extract_merchant_from_first_row(first_part, payment_method)
-                clean_description = f"{merchant_description} {remaining_parts}".strip()
-            
-            # Determine amount and type
-            total_paid_out = sum(amounts_paid_out) if amounts_paid_out else 0
-            total_paid_in = sum(amounts_paid_in) if amounts_paid_in else 0
-            
-            if total_paid_out > 0:
-                amount = -total_paid_out
-                transaction_type = 'debit'
-            elif total_paid_in > 0:
-                amount = total_paid_in
-                transaction_type = 'credit'
-            else:
-                return None  # No amount found
-            
-            # Use the last balance found in this group
-            final_balance = balances[-1] if balances else None
-            
-            # Final cleanup
-            clean_description = self._clean_description(clean_description)
-            
-            # Extract merchant and location using existing logic
-            merchant, location = self.extract_merchant_and_location(clean_description)
-            
-            return Transaction(
-                date=transaction_date,
-                description=clean_description,
-                amount=amount,
-                balance=final_balance,
-                transaction_type=transaction_type,
-                payment_method=payment_method,
-                merchant=merchant,
-                location=location,
-                raw_description=full_description
-            )
-            
-        except Exception as e:
-            logger.warning(f"Error parsing transaction group: {e}")
+        # Collect data from all rows
+        date_text = ''
+        desc_parts = []
+        paid_out_str = ''
+        paid_in_str = ''
+        balance_str = ''
+        
+        for row in group:
+            if row['date'].strip():
+                date_text = row['date'].strip()
+            if row['description'].strip():
+                desc_parts.append(row['description'].strip())
+            if row['paid_out'].strip():
+                paid_out_str = row['paid_out'].strip()
+            if row['paid_in'].strip():
+                paid_in_str = row['paid_in'].strip()
+            # Take the last balance value (end-of-day balance appears on last row)
+            if row['balance'].strip():
+                balance_str = row['balance'].strip()
+        
+        full_description = ' '.join(desc_parts)
+        
+        # Skip BALANCE BROUGHT/CARRIED FORWARD entries
+        all_text = f"{date_text} {full_description}"
+        if self._is_page_boundary_row(all_text):
             return None
-    
-    def _parse_date_and_payment_method(self, text: str) -> Tuple[Optional[datetime], Optional[str]]:
-        """
-        Parse date and payment method from first row.
         
-        Format: "05 Jan 26\nVIS\nSAMPLE MERCHANT 2586"
-        """
-        if not text or text.strip() == '':
-            return None, None
+        if not full_description:
+            return None
         
-        text = text.strip()
+        # Extract payment code from the FIRST line only (line 1 = main description)
+        # Lines 2+ are reference/location details shown separately in the dashboard
+        first_line = desc_parts[0] if desc_parts else ''
+        reference_lines = desc_parts[1:] if len(desc_parts) > 1 else []
+        reference_text = ' '.join(reference_lines).strip() if reference_lines else None
         
-        # Extract date (should be at the beginning)
-        date_match = re.match(r'(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2})', text)
-        if not date_match:
-            return None, None
+        payment_type, merchant_text = self._extract_payment_code(first_line)
         
-        day, month_abbr, year_short = date_match.groups()
+        # Parse date
+        transaction_date = None
+        if date_text:
+            transaction_date = self._parse_hsbc_date(date_text)
+        if not transaction_date:
+            transaction_date = current_date
+        if not transaction_date:
+            logger.warning(f"No date for transaction: {full_description[:50]}")
+            return None
         
-        # Parse date (assume 20xx for 2-digit years)
-        year = int(f"20{year_short}")
-        try:
-            transaction_date = datetime.strptime(f"{day} {month_abbr} {year}", "%d %b %Y")
-        except ValueError:
-            return None, None
+        # Parse amounts -- column position guarantees correct sign
+        paid_out = self._parse_amount(paid_out_str)
+        paid_in = self._parse_amount(paid_in_str)
+        balance = self._parse_amount(balance_str)
         
-        # Extract payment method from the remaining text
-        remainder = text[date_match.end():].strip()
-        payment_method = self._extract_payment_method_from_text(remainder)
-        
-        return transaction_date, payment_method
-    
-    def _extract_merchant_from_first_row(self, text: str, payment_method: Optional[str]) -> str:
-        """
-        Extract merchant description from the first row after removing date and payment method.
-        
-        Input: "05 Jan 26\nVIS\nSAMPLE MERCHANT 2586"
-        Output: "SAMPLE MERCHANT 2586"
-        """
-        # Remove the date part
-        date_match = re.match(r'(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2})', text)
-        if date_match:
-            remainder = text[date_match.end():].strip()
+        if paid_out:
+            amount = -paid_out  # Paid out = debit = negative
+            transaction_type = 'debit'
+        elif paid_in:
+            amount = paid_in   # Paid in = credit = positive
+            transaction_type = 'credit'
         else:
-            remainder = text
+            return None  # No amount found
         
-        # Remove payment method if present
-        if payment_method:
-            # Handle newline-separated payment methods
-            remainder = re.sub(rf'^{re.escape(payment_method)}\s*', '', remainder)
-            remainder = re.sub(rf'\n{re.escape(payment_method)}\s*', ' ', remainder)
-            remainder = re.sub(rf'\n{re.escape(payment_method)}$', '', remainder)
+        # Build description from first line only
+        raw_description = full_description
         
-        # Clean up newlines and extra spaces
-        remainder = re.sub(r'\s*\n\s*', ' ', remainder)
-        remainder = re.sub(r'\s+', ' ', remainder).strip()
+        # Clean description using base parser method (first line only)
+        cleaned_description, extracted_payment = self.clean_transaction_description(
+            merchant_text if merchant_text else first_line,
+            payment_type if payment_type else None
+        )
         
-        return remainder
+        final_payment_method = payment_type if payment_type else extracted_payment
+        
+        # Extract merchant and location from full text (all lines) for accuracy
+        merchant, location = self.extract_merchant_and_location(
+            ' '.join(filter(None, [cleaned_description, reference_text]))
+        )
+        
+        return Transaction(
+            date=transaction_date,
+            description=cleaned_description,
+            amount=amount,
+            balance=balance,
+            transaction_type=transaction_type,
+            payment_method=final_payment_method,
+            merchant=merchant,
+            location=location,
+            raw_description=raw_description,
+            reference=reference_text
+        )
     
-    def _parse_date_and_description(self, text: str, current_date: Optional[datetime]) -> Tuple[Optional[datetime], str, Optional[str]]:
+    # -------------------------------------------------------------------------
+    # Step 4: Balance validation
+    # -------------------------------------------------------------------------
+    
+    def _validate_balances(self, transactions: List[Transaction], structured_rows: List[dict]) -> List[Transaction]:
         """
-        Parse date, description, and payment method from the first column.
+        Validate transactions against statement balance data.
         
-        Format examples:
-        "05 Feb VIS SAMPLE MERCHANT 2586 CITY"
-        "26   DD-AccountHolder SAMPLE ORGANIZATION"
-        "    CR REFUND FROM MERCHANT"
+        Uses the opening balance (first BALANCE BROUGHT FORWARD) and
+        end-of-day balance values to verify transaction signs are correct.
+        Logs warnings for any mismatches.
         """
-        if not text or text.strip() == '':
-            return None, "", None
+        # Extract opening and closing balances from structured rows
+        opening_balance = None
+        closing_balance = None
         
-        text = text.strip()
+        for row in structured_rows:
+            all_text = f"{row['date']} {row['description']}"
+            if 'BALANCE' in all_text.upper() and 'BROUGHT' in all_text.upper():
+                if opening_balance is None:
+                    opening_balance = self._parse_amount(row['balance'])
+            if 'BALANCE' in all_text.upper() and 'CARRIED' in all_text.upper():
+                closing_balance = self._parse_amount(row['balance'])
         
-        # Try to extract date
-        date_match = re.match(r'(\d{1,2})\s+([A-Za-z]{3})\s*(.*)', text)
-        if date_match:
-            day, month_abbr, remainder = date_match.groups()
+        if opening_balance is None:
+            logger.warning("Could not find opening balance for validation")
+            return transactions
+        
+        closing_str = f"{closing_balance:.2f}" if closing_balance else "N/A"
+        logger.info(f"Balance validation: opening={opening_balance:.2f}, closing={closing_str}")
+        
+        # Walk through transactions with running balance
+        running = opening_balance
+        mismatches = 0
+        
+        for txn in transactions:
+            running += txn.amount
             
-            # Parse date using current year context
-            year = current_date.year if current_date else 2026  # Default to 2026 for HSBC statements
-            try:
-                transaction_date = datetime.strptime(f"{day} {month_abbr} {year}", "%d %b %Y")
-            except ValueError:
-                transaction_date = None
-            
-            description_text = remainder.strip()
+            if txn.balance is not None:
+                expected = txn.balance
+                if abs(running - expected) > 0.02:
+                    mismatches += 1
+                    logger.warning(
+                        f"Balance mismatch after '{txn.description[:40]}': "
+                        f"computed={running:.2f}, expected={expected:.2f}, "
+                        f"diff={running - expected:.2f}"
+                    )
+        
+        # Final validation against closing balance
+        if closing_balance is not None:
+            if abs(running - closing_balance) < 0.02:
+                logger.info(f"Balance validation PASSED: final={running:.2f} matches closing={closing_balance:.2f}")
+            else:
+                net = sum(t.amount for t in transactions)
+                logger.warning(
+                    f"Balance validation FAILED: opening={opening_balance:.2f} + net={net:.2f} = "
+                    f"{opening_balance + net:.2f}, expected closing={closing_balance:.2f}"
+                )
+        
+        if mismatches == 0:
+            logger.info("All end-of-day balance checkpoints passed")
         else:
-            # No date found - might be continuation row
-            transaction_date = None
-            description_text = text
+            logger.warning(f"{mismatches} balance checkpoint(s) failed")
         
-        # Extract payment method
-        payment_method = self._extract_payment_method_from_text(description_text)
-        
-        # Clean description (remove payment method prefix)
-        if payment_method and description_text.startswith(payment_method + ' '):
-            description_text = description_text[len(payment_method):].strip()
-        
-        # Additional cleanup
-        description_text = self._clean_description(description_text)
-        
-        return transaction_date, description_text, payment_method
+        return transactions
     
-    def _extract_payment_method_from_text(self, text: str) -> Optional[str]:
-        """Extract payment method from description text."""
+    # -------------------------------------------------------------------------
+    # Helper methods
+    # -------------------------------------------------------------------------
+    
+    def _looks_like_transaction_date(self, text: str) -> bool:
+        """Check if text looks like a transaction date."""
+        if not text or not isinstance(text, str):
+            return False
+        date_patterns = [
+            r'\d{1,2}\s+[A-Za-z]{3}\s+\d{2}',  # "05 Feb 26"
+            r'\d{1,2}/\d{1,2}/\d{2,4}',          # "05/02/26"
+            r'\d{4}-\d{2}-\d{2}'                  # "2026-02-05"
+        ]
+        return any(re.search(pattern, text) for pattern in date_patterns)
+    
+    def _parse_hsbc_date(self, text: str) -> Optional[datetime]:
+        """Parse HSBC date format (e.g. '05 Jan 26' or '05 Jan 2026')."""
         if not text:
             return None
+        text = text.strip()
         
-        # Get all payment method codes from our comprehensive list
-        methods = list(PAYMENT_METHOD_MEANINGS.keys())
+        match = re.match(r'(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2,4})', text)
+        if not match:
+            return None
         
-        # Check for exact method matches with newlines (common in HSBC extractions)
-        for method in methods:
-            if f'\n{method}\n' in text or f'\n{method} ' in text or text.startswith(method + ' ') or text.startswith(method + '\n'):
-                return method
+        day, month_abbr, year_str = match.groups()
+        if len(year_str) == 2:
+            year = int(f"20{year_str}")
+        else:
+            year = int(year_str)
         
-        # Fallback to simple prefix check
-        for method in methods:
-            if text.startswith(method + ' ') or text.startswith(method + '-'):
-                return method
-        
-        return None
+        try:
+            return datetime.strptime(f"{day} {month_abbr} {year}", "%d %b %Y")
+        except ValueError as e:
+            logger.warning(f"Failed to parse date '{text}': {e}")
+            return None
     
-    def _clean_description(self, description: str) -> str:
-        """Clean transaction description."""
-        if not description:
-            return ""
-        
-        # Remove common HSBC reference patterns
-        description = re.sub(r'DD-\w+[A-Za-z]+', 'DD', description)  # Remove direct debit references
-        description = re.sub(r'\b\d{6}\s+\d{8}\b', '', description)  # Remove sort code + account
-        
-        # Remove trailing balance amounts that might have leaked in
-        description = re.sub(r'\s+\d{1,3}(?:,\d{3})*\.\d{2}\s*$', '', description)
-        
-        # Clean up whitespace
-        description = re.sub(r'\s+', ' ', description).strip()
-        
-        return description
+    def _is_page_boundary_row(self, text: str) -> bool:
+        """Check if text is a page boundary (not transaction data)."""
+        boundary_indicators = [
+            'BALANCE BROUGHT FORWARD',
+            'BALANCE CARRIED FORWARD',
+            'BALANCEBROUGHTFORWARD',
+            'BALANCECARRIEDFORWARD',
+            'BALANCECARRIED',
+            'BALANCEBROUGHT',
+        ]
+        text_upper = text.upper()
+        return any(indicator in text_upper for indicator in boundary_indicators)
     
     def _parse_amount(self, text: str) -> Optional[float]:
         """Parse monetary amount from text."""
-        if not text or text.strip() == '' or text == 'nan':
+        if not text or text.strip() == '' or text.strip() == 'nan':
             return None
-        
-        # Remove currency symbols and clean
         text = str(text).replace('£', '').replace(',', '').strip()
-        
         try:
             return float(text)
         except (ValueError, TypeError):
             return None
     
-    def parse_transactions_from_table(self, tables: List[List[List[str]]]) -> List[Transaction]:
-        """Parse transactions from pre-extracted table data (fallback method)."""
-        logger.info("Advanced HSBC parser: Using direct PDF parsing instead of pre-extracted tables")
-        return []
+

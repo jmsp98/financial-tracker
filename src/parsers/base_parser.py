@@ -24,6 +24,7 @@ class Transaction:
     merchant: str  # Clean merchant name
     location: Optional[str]  # Transaction location if available
     raw_description: str  # Full original text for debugging
+    reference: Optional[str] = None  # Lines 2+ from multi-line PDF transactions (location, card ref, etc.)
 
 
 class BaseBankParser(ABC):
@@ -155,22 +156,103 @@ class BaseBankParser(ABC):
         logger.warning(f"Could not parse date: {date_str}")
         return None
     
+    def clean_transaction_description(self, raw_description: str, existing_payment_method: Optional[str] = None) -> Tuple[str, Optional[str]]:
+        """
+        Extract payment method from description start and return cleaned description.
+        
+        This function handles transactions where payment method codes appear at the start
+        of descriptions with newline separators (e.g., "VIS\nTESCO STORES" -> "TESCO STORES").
+        
+        Args:
+            raw_description: Original transaction description
+            existing_payment_method: Already extracted payment method (takes precedence)
+            
+        Returns:
+            Tuple of (cleaned_description, extracted_payment_method)
+            
+        Logic:
+            - If existing_payment_method present → use it, still clean description
+            - Extract leftmost code (DD, OBP, ))) etc.) from start of description
+            - Remove code + newline/space separator
+            - Return cleaned description + extracted code
+        """
+        if not raw_description:
+            return "", None
+            
+        # Payment method patterns to look for at start of description
+        # Based on analysis of actual transaction data
+        DESCRIPTION_PAYMENT_PATTERNS = {
+            r'^VIS\n': 'VIS',           # Visa transactions
+            r'^DD\n': 'DD',             # Direct Debits  
+            r'^\)\)\)\n': ')))',        # Contactless payments
+            r'^TFR\n': 'TFR',           # Transfers
+            r'^BP\n': 'BP',             # Bill Payments
+            r'^CR\n': 'CR',             # Credits
+            r'^FP\n': 'FP',             # Faster Payments
+            r'^SO\n': 'SO',             # Standing Orders
+            r'^BACS\n': 'BACS',         # BACS payments
+            r'^CHAPS\n': 'CHAPS',       # CHAPS payments
+            r'^ATM\n': 'ATM',           # ATM transactions
+            r'^POS\n': 'POS',           # Point of Sale
+            r'^MC\n': 'MC',             # Mastercard
+            r'^OBP\n': 'OBP',           # Open Banking Payment
+        }
+        
+        cleaned_description = raw_description
+        extracted_payment_method = None
+        
+        # Try to extract payment method from description start
+        for pattern, payment_method in DESCRIPTION_PAYMENT_PATTERNS.items():
+            match = re.match(pattern, raw_description)
+            if match:
+                # Extract the payment method code
+                extracted_payment_method = payment_method
+                # Remove the code and newline from description
+                cleaned_description = re.sub(pattern, '', raw_description, count=1)
+                break
+        
+        # Additional cleaning: handle space-separated codes (e.g., "))) MERCHANT")
+        if not extracted_payment_method:
+            space_patterns = {
+                r'^\)\)\) ': ')))',      # Contactless with space
+                r'^VIS ': 'VIS',         # Visa with space
+                r'^DD ': 'DD',           # Direct Debit with space
+                r'^CR ': 'CR',           # Credit with space
+            }
+            
+            for pattern, payment_method in space_patterns.items():
+                match = re.match(pattern, raw_description)
+                if match:
+                    extracted_payment_method = payment_method
+                    cleaned_description = re.sub(pattern, '', raw_description, count=1)
+                    break
+        
+        # Clean up whitespace
+        cleaned_description = cleaned_description.strip()
+        
+        # Prefer existing payment method if available, but return extracted for logging/validation
+        final_payment_method = existing_payment_method if existing_payment_method else extracted_payment_method
+        
+        logger.debug(f"Description cleaning: '{raw_description}' -> '{cleaned_description}', payment_method: {final_payment_method}")
+        
+        return cleaned_description, extracted_payment_method
+
     def extract_merchant_and_location(self, description: str) -> Tuple[str, Optional[str]]:
         """
         Extract merchant name and location from transaction description.
         
+        Note: This method now expects pre-cleaned descriptions (payment method codes already removed).
+        
         Args:
-            description: Transaction description
+            description: Clean transaction description (no payment method prefixes)
             
         Returns:
             Tuple of (merchant, location)
         """
-        # Remove common prefixes
-        cleaned = description
-        for prefix in ['VIS ', 'DD ', '))) ', 'CR ']:
-            if cleaned.startswith(prefix):
-                cleaned = cleaned[len(prefix):].strip()
-                break
+        if not description:
+            return "", None
+            
+        cleaned = description.strip()
         
         # Try to split on location patterns
         # Pattern: MERCHANT NAME LOCATION
@@ -180,7 +262,7 @@ class BaseBankParser(ABC):
             return cleaned, None
         
         # Look for common location indicators
-        location_indicators = ['CITY', 'TOWN', 'LOCATION', 'AREA', 'CENTER', 'DISTRICT']
+        location_indicators = ['CITY', 'TOWN', 'LOCATION', 'AREA', 'CENTER', 'DISTRICT', 'LONDON', 'OXFORD', 'BARNES']
         
         for i, part in enumerate(parts):
             if part.upper() in location_indicators:
@@ -189,6 +271,7 @@ class BaseBankParser(ABC):
                 return merchant, location if location else None
         
         # If no clear location found, treat last 1-2 words as potential location
+        # Common pattern: "MERCHANT NAME CITY" or "MERCHANT LOCATION"
         if len(parts) > 3:
             merchant = ' '.join(parts[:-1]).strip()
             location = parts[-1]
