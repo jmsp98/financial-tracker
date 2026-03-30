@@ -1,120 +1,28 @@
-# Financial Data - NEVER COMMIT
+# Financial data - NEVER COMMIT
 data/
-*.pdf
-*statement*
-*Statement*
-*.csv
-*transactions*.json
-*categorized*.json
-
-# Training Data - NEVER COMMIT (contains personal financial info)
 training_data/
-*training*.json
-user_feedback.json
-historical_*.json
-*manual_categorizations*
-categorization_session_stats.json
-categorization_progress.json
-
-# Personal Configuration - NEVER COMMIT
-personal_config.py
-*personal*
-
-# Analysis and Debug Files
-analyze_*.py
-debug_*.py
-find_*.py
-show_*.py
-examine_*.py
-count_*.py
-detailed_*.py
-pdf_structure_*.json
-*_analysis.json
-test_*_detection.py
-test_*_edge_cases.py
-test_extraction_modes.py
-test_feb_specific.py
-test_mar_specific.py
-test_sequential_parser.py
-balance_analysis.py
-verify_calculations.py
-validate_balances.py
+config.yaml
 
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
 *.egg
-MANIFEST
 
-# Virtual Environment
+# Virtual environment
 venv/
 env/
-ENV/
-env.bak/
-venv.bak/
 
 # IDE
 .vscode/
 .idea/
 *.swp
-*.swo
-*~
 
 # OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+
+# Secrets
+.env
 
 # Logs
 *.log
-logs/
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# Temporary files
-*.tmp
-*.temp
-temp/
-tmp/
-
-# Configuration files that might contain secrets
-config.ini
-settings.ini
-.env
-.env.*
-secrets.py
-secrets.json
-
-# Machine Learning Models
-*.pkl
-*.pickle
-models/
-checkpoints/
-
-# Test outputs
-test_output/
-test_results/personal_config.py
