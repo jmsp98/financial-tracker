@@ -4,6 +4,7 @@ Dashboard runner script for the Financial Tracker.
 Starts the interactive Dash web dashboard for data visualization and analysis.
 """
 
+import argparse
 import os
 import sys
 import logging
@@ -14,6 +15,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 def main():
     """Run the financial dashboard."""
     
+    parser = argparse.ArgumentParser(description="Financial Tracker Dashboard")
+    parser.add_argument(
+        '--reprocess', action='store_true',
+        help='Force re-extraction and categorization of all PDFs, ignoring cached data'
+    )
+    args = parser.parse_args()
+    
     # Setup logging
     logging.basicConfig(
         level=logging.WARNING,  # Reduced verbosity - only show warnings and errors
@@ -23,14 +31,16 @@ def main():
     logger = logging.getLogger(__name__)
     
     try:
-        # Import dashboard
-        from src.dashboard import dashboard
+        # Import and create dashboard with reprocess flag
+        from src.dashboard import FinancialDashboard, HAS_DASH
         
-        if dashboard is None:
+        if not HAS_DASH:
             print("❌ Dashboard dependencies not installed!")
             print("\nInstall required packages:")
             print("  pip install dash plotly dash-bootstrap-components")
             sys.exit(1)
+        
+        dashboard = FinancialDashboard(force_reprocess=args.reprocess)
         
         # Try different ports if default is in use
         import socket

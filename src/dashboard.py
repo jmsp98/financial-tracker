@@ -27,10 +27,11 @@ logger = logging.getLogger(__name__)
 class FinancialDashboard:
     """Interactive dashboard for financial data analysis."""
     
-    def __init__(self):
+    def __init__(self, force_reprocess: bool = False):
         if not HAS_DASH:
             raise ImportError("Dash dependencies not found. Install with: pip install dash plotly dash-bootstrap-components")
         
+        self.force_reprocess = force_reprocess
         self.app = dash.Dash(
             __name__,
             external_stylesheets=[dbc.themes.BOOTSTRAP],
@@ -43,6 +44,30 @@ class FinancialDashboard:
         self.load_data()
         self.setup_layout()
         self.setup_callbacks()
+    
+    def _get_cache_meta_path(self):
+        """Return the path to the cache metadata file."""
+        categorized_path = config.get('data.categorized', './data/categorized')
+        return os.path.join(categorized_path, '.cache_meta.json')
+    
+    def _get_cached_pdf_set(self):
+        """Read the set of PDF filenames from cache metadata. Returns None if no cache."""
+        meta_path = self._get_cache_meta_path()
+        if not os.path.exists(meta_path):
+            return None
+        try:
+            with open(meta_path, 'r') as f:
+                meta = json.load(f)
+            return set(meta.get('source_pdfs', []))
+        except Exception:
+            return None
+    
+    def _write_cache_meta(self, pdf_filenames):
+        """Write cache metadata after successful processing."""
+        meta_path = self._get_cache_meta_path()
+        os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+        with open(meta_path, 'w') as f:
+            json.dump({'source_pdfs': sorted(pdf_filenames)}, f, indent=2)
     
     def auto_process_bank_statements(self):
         """Automatically process any new bank statements in data/raw/"""
@@ -57,6 +82,37 @@ class FinancialDashboard:
             if not pdf_files:
                 logger.info("No PDF bank statements found in data/raw/")
                 return False
+            
+            # --- Cache check ---
+            if not self.force_reprocess:
+                cached_file = os.path.join(categorized_path, 'all_categorized_transactions.json')
+                cached_pdfs = self._get_cached_pdf_set()
+                current_pdfs = set(pdf_files)
+                
+                if cached_pdfs is not None and os.path.exists(cached_file):
+                    new_pdfs = current_pdfs - cached_pdfs
+                    if not new_pdfs:
+                        # Cache is up to date — skip processing
+                        # Count transactions from the cached file for the message
+                        try:
+                            with open(cached_file, 'r') as f:
+                                cached_data = json.load(f)
+                            if isinstance(cached_data, list):
+                                txn_count = len(cached_data)
+                            elif isinstance(cached_data, dict) and 'transactions' in cached_data:
+                                txn_count = len(cached_data['transactions'])
+                            else:
+                                txn_count = '?'
+                        except Exception:
+                            txn_count = '?'
+                        
+                        print(f"\n📄 Using cached data ({txn_count} transactions from {len(current_pdfs)} PDFs).")
+                        print(f"   Use --reprocess to re-extract from PDFs.\n")
+                        return True
+                    else:
+                        print(f"\n📄 New PDF(s) detected: {', '.join(sorted(new_pdfs))}. Re-processing all statements...")
+            else:
+                print(f"\n📄 --reprocess flag set. Re-processing all statements...")
             
             logger.info(f"Found {len(pdf_files)} PDF bank statements. Auto-processing...")
             
@@ -154,6 +210,9 @@ class FinancialDashboard:
                 json.dump(categorized_transactions, f, indent=2, default=str)
             
             logger.info(f"Auto-processing complete! Categorized {len(categorized_transactions)} transactions")
+            
+            # Step 5: Write cache metadata so next startup can skip re-processing
+            self._write_cache_meta(pdf_files)
             
             # Count ML vs unknown predictions
             ml_predictions = sum(1 for t in categorized_transactions if t.get('category') != 'unknown')
@@ -2668,5 +2727,5 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
         ])
 
 
-# Global dashboard instance
-dashboard = FinancialDashboard() if HAS_DASH else None
+# Note: Dashboard is now instantiated in scripts/run_dashboard.py with
+# the force_reprocess flag. No global instance is created on import.
