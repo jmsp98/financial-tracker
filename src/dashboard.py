@@ -1035,49 +1035,59 @@ class FinancialDashboard:
             )
             return fig
         
-        from collections import OrderedDict
-        
         # Ensure dates are datetime objects
         for txn in filtered_data:
             if isinstance(txn['date'], str):
                 txn['date'] = datetime.fromisoformat(txn['date'])
         
-        # Group transactions by period
-        periods = OrderedDict()  # key -> {income, expenses, net}
-        
         sorted_txns = sorted(filtered_data, key=lambda x: x['date'])
+        first_date = sorted_txns[0]['date']
+        last_date = sorted_txns[-1]['date']
+        
+        # Build complete sequence of period datetime keys (no gaps)
+        period_dates = []  # list of datetime (Monday for weekly, 1st of month for monthly)
+        if aggregation == 'weekly':
+            cursor = first_date - timedelta(days=first_date.weekday())  # Monday of first week
+            end = last_date - timedelta(days=last_date.weekday())       # Monday of last week
+            while cursor <= end:
+                period_dates.append(cursor)
+                cursor += timedelta(weeks=1)
+        else:
+            cursor = first_date.replace(day=1)
+            end = last_date.replace(day=1)
+            while cursor <= end:
+                period_dates.append(cursor)
+                # Advance one month
+                if cursor.month == 12:
+                    cursor = cursor.replace(year=cursor.year + 1, month=1)
+                else:
+                    cursor = cursor.replace(month=cursor.month + 1)
+        
+        # Map each period datetime -> aggregated values
+        period_map = {d: {'income': 0.0, 'expenses': 0.0, 'net': 0.0} for d in period_dates}
         
         for txn in sorted_txns:
             d = txn['date']
             if aggregation == 'weekly':
-                # ISO week, keyed by Monday date for sorting
-                week_start = d - timedelta(days=d.weekday())
-                period_key = week_start.strftime('%Y-%m-%d')
-                period_label = week_start.strftime('%d %b')
+                key = d - timedelta(days=d.weekday())
             else:
-                period_key = d.strftime('%Y-%m')
-                period_label = d.strftime('%b %Y')
+                key = d.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             
-            if period_key not in periods:
-                periods[period_key] = {'label': period_label, 'income': 0.0, 'expenses': 0.0, 'net': 0.0}
+            if key not in period_map:
+                period_map[key] = {'income': 0.0, 'expenses': 0.0, 'net': 0.0}
             
             if txn['amount'] > 0:
-                periods[period_key]['income'] += txn['amount']
+                period_map[key]['income'] += txn['amount']
             else:
-                periods[period_key]['expenses'] += txn['amount']  # keep negative
-            
-            periods[period_key]['net'] += txn['amount']
+                period_map[key]['expenses'] += txn['amount']  # keep negative
+            period_map[key]['net'] += txn['amount']
         
-        # Sort periods chronologically
-        sorted_keys = sorted(periods.keys())
-        labels = [periods[k]['label'] for k in sorted_keys]
-        income_vals = [periods[k]['income'] for k in sorted_keys]
-        expense_vals = [periods[k]['expenses'] for k in sorted_keys]
+        x_dates    = period_dates
+        income_vals  = [period_map[d]['income']   for d in x_dates]
+        expense_vals = [period_map[d]['expenses'] for d in x_dates]
         
         # Calculate running balance
-        # Find opening balance from the first transaction with balance data
         balance_txns = [t for t in sorted_txns if t.get('balance') is not None and t.get('balance') != 0.0]
-        
         if balance_txns:
             first_balance_txn = balance_txns[0]
             idx = sorted_txns.index(first_balance_txn)
@@ -1088,16 +1098,33 @@ class FinancialDashboard:
         
         running_balance = []
         cumulative = opening_balance
-        for k in sorted_keys:
-            cumulative += periods[k]['net']
+        for d in x_dates:
+            cumulative += period_map[d]['net']
             running_balance.append(cumulative)
+        
+        # y-axis range for balance: always include 0 as lower bound
+        balance_min = min(running_balance)
+        balance_max = max(running_balance)
+        y2_min = min(0.0, balance_min * 1.05)
+        y2_max = balance_max * 1.05
+        
+        # x-axis tick format and spacing
+        blue = 'rgba(31, 119, 180, 0.9)'
+        if aggregation == 'weekly':
+            tick_format = '%d %b'
+            # Show roughly every 4 weeks to avoid crowding
+            n_weeks = len(x_dates)
+            dtick = max(1, round(n_weeks / 8)) * 7 * 24 * 3600000  # ms
+        else:
+            tick_format = '%b %Y'
+            dtick = 'M1'
         
         # Build figure with secondary y-axis
         fig = go.Figure()
         
         # Income bars (green, above zero)
         fig.add_trace(go.Bar(
-            x=labels,
+            x=x_dates,
             y=income_vals,
             name='Income',
             marker_color='rgba(44, 160, 44, 0.75)',
@@ -1106,7 +1133,7 @@ class FinancialDashboard:
         
         # Expense bars (red, below zero)
         fig.add_trace(go.Bar(
-            x=labels,
+            x=x_dates,
             y=expense_vals,
             name='Expenses',
             marker_color='rgba(214, 39, 40, 0.75)',
@@ -1115,11 +1142,11 @@ class FinancialDashboard:
         
         # Running balance line on secondary y-axis
         fig.add_trace(go.Scatter(
-            x=labels,
+            x=x_dates,
             y=running_balance,
             name='Balance',
             mode='lines+markers',
-            line=dict(color='rgba(31, 119, 180, 0.9)', width=2.5),
+            line=dict(color=blue, width=2.5),
             marker=dict(size=5),
             yaxis='y2',
             hovertemplate=f'{self.currency_symbol}%{{y:,.2f}}<extra>Balance</extra>'
@@ -1136,6 +1163,12 @@ class FinancialDashboard:
                 xanchor="right",
                 x=1
             ),
+            xaxis=dict(
+                type='date',
+                tickformat=tick_format,
+                dtick=dtick,
+                tickangle=0,
+            ),
             yaxis=dict(
                 tickprefix=self.currency_symbol,
                 zeroline=True,
@@ -1147,12 +1180,11 @@ class FinancialDashboard:
                 overlaying='y',
                 side='right',
                 showgrid=False,
+                range=[y2_min, y2_max],
+                tickfont=dict(color=blue),
             ),
             margin=dict(t=30, b=60),
         )
-        
-        if len(labels) > 12:
-            fig.update_xaxes(tickangle=45)
         
         return fig
     
