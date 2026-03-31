@@ -1111,12 +1111,12 @@ class FinancialDashboard:
         # x-axis tick format and spacing
         blue = 'rgba(31, 119, 180, 0.9)'
         if aggregation == 'weekly':
-            tick_format = '%b %d, %Y'
+            tick_format = '%b %d, %y'
             # Show roughly every 4 weeks to avoid crowding
             n_weeks = len(x_dates)
             dtick = max(1, round(n_weeks / 8)) * 7 * 24 * 3600000  # ms
         else:
-            tick_format = '%b %d, %Y'
+            tick_format = '%b %y'
             dtick = 'M1'
         
         # Build figure with secondary y-axis
@@ -1429,12 +1429,33 @@ class FinancialDashboard:
             ),
         ))
 
-        # Tick values: only intermediate bars (exclude opening at [0] and closing at [-1])
+        # Evenly-spaced ticks across data range (not sampled from bar positions)
         intermediate_dates = waterfall_data['x'][1:-1]
-        step = max(1, len(intermediate_dates) // 12)
-        sampled_dates = intermediate_dates[::step]
-        tickvals = sampled_dates
-        ticktext = [d.strftime('%b %d, %Y') for d in sampled_dates]
+        if intermediate_dates:
+            first = intermediate_dates[0]
+            last = intermediate_dates[-1]
+            span_days = (last - first).days
+
+            if aggregation == 'monthly':
+                tick_fmt = '%b %y'
+                tickvals = []
+                cursor = first.replace(day=1)
+                while cursor <= last:
+                    tickvals.append(cursor)
+                    if cursor.month == 12:
+                        cursor = cursor.replace(year=cursor.year + 1, month=1)
+                    else:
+                        cursor = cursor.replace(month=cursor.month + 1)
+            else:
+                tick_fmt = '%b %d, %y'
+                n_ticks = min(12, max(4, span_days // 14))
+                tick_interval = span_days / max(n_ticks, 1)
+                tickvals = [first + timedelta(days=round(i * tick_interval)) for i in range(n_ticks + 1)]
+
+            ticktext = [d.strftime(tick_fmt) for d in tickvals]
+        else:
+            tickvals = []
+            ticktext = []
 
         fig.update_layout(
             template='plotly_white',
