@@ -563,6 +563,44 @@ class FinancialDashboard:
             
             return waterfall_fig, daily_color, weekly_color, monthly_color
         
+        # Income & Expenses aggregation callback
+        @self.app.callback(
+            [Output('income-expenses-chart', 'figure'),
+             Output('income-exp-weekly-btn', 'color'),
+             Output('income-exp-monthly-btn', 'color')],
+            [Input('income-exp-weekly-btn', 'n_clicks'),
+             Input('income-exp-monthly-btn', 'n_clicks'),
+             Input('date-range-picker', 'start_date'),
+             Input('date-range-picker', 'end_date')],
+            prevent_initial_call=False
+        )
+        def update_income_expenses_chart(weekly_clicks, monthly_clicks, start_date, end_date):
+            """Handle income/expenses aggregation toggle and date range changes."""
+            ctx = dash.callback_context
+            
+            if start_date:
+                start_date = datetime.fromisoformat(start_date)
+            if end_date:
+                end_date = datetime.fromisoformat(end_date)
+            
+            filtered_data = analyzer.filter_transactions_by_date_range(
+                self.categorized_data, start_date, end_date
+            )
+            
+            # Determine aggregation — default to monthly
+            aggregation = 'monthly'
+            if ctx.triggered:
+                button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+                if button_id == 'income-exp-weekly-btn':
+                    aggregation = 'weekly'
+            
+            fig = self.create_income_expenses_chart(filtered_data, aggregation)
+            
+            weekly_color = "primary" if aggregation == 'weekly' else "outline-primary"
+            monthly_color = "primary" if aggregation == 'monthly' else "outline-primary"
+            
+            return fig, weekly_color, monthly_color
+        
         # Callbacks for Review Other tab hierarchical categorization
         # We'll add these dynamically since we don't know how many transactions there will be
         self.setup_review_callbacks()
@@ -980,82 +1018,141 @@ class FinancialDashboard:
         
         return fig
     
-    def create_monthly_trends_chart(self, monthly_data: Dict) -> go.Figure:
-        """Create monthly income vs expenses trend chart."""
-        if not monthly_data:
+    def create_income_expenses_chart(self, filtered_data: List[Dict], aggregation: str = 'monthly') -> go.Figure:
+        """Create income/expenses bar chart with running balance line.
+        
+        Args:
+            filtered_data: List of transaction dicts
+            aggregation: 'weekly' or 'monthly'
+        """
+        if not filtered_data:
             fig = go.Figure()
             fig.add_annotation(
-                text="No monthly data available",
+                text="No data available",
                 xref="paper", yref="paper",
                 x=0.5, y=0.5, xanchor='center', yanchor='middle',
                 showarrow=False, font=dict(size=16)
             )
             return fig
         
-        months = sorted(monthly_data.keys())
+        from collections import OrderedDict
         
-        # Extract income and expenses data
-        income_values = []
-        expense_values = []
+        # Ensure dates are datetime objects
+        for txn in filtered_data:
+            if isinstance(txn['date'], str):
+                txn['date'] = datetime.fromisoformat(txn['date'])
         
-        for month in months:
-            month_summary = monthly_data[month]
-            total_income = month_summary.get('total_income', 0)
-            total_expenses = abs(month_summary.get('total_expenses', 0))  # Make positive for chart
+        # Group transactions by period
+        periods = OrderedDict()  # key -> {income, expenses, net}
+        
+        sorted_txns = sorted(filtered_data, key=lambda x: x['date'])
+        
+        for txn in sorted_txns:
+            d = txn['date']
+            if aggregation == 'weekly':
+                # ISO week, keyed by Monday date for sorting
+                week_start = d - timedelta(days=d.weekday())
+                period_key = week_start.strftime('%Y-%m-%d')
+                period_label = week_start.strftime('%d %b')
+            else:
+                period_key = d.strftime('%Y-%m')
+                period_label = d.strftime('%b %Y')
             
-            income_values.append(total_income)
-            expense_values.append(total_expenses)
+            if period_key not in periods:
+                periods[period_key] = {'label': period_label, 'income': 0.0, 'expenses': 0.0, 'net': 0.0}
+            
+            if txn['amount'] > 0:
+                periods[period_key]['income'] += txn['amount']
+            else:
+                periods[period_key]['expenses'] += txn['amount']  # keep negative
+            
+            periods[period_key]['net'] += txn['amount']
         
+        # Sort periods chronologically
+        sorted_keys = sorted(periods.keys())
+        labels = [periods[k]['label'] for k in sorted_keys]
+        income_vals = [periods[k]['income'] for k in sorted_keys]
+        expense_vals = [periods[k]['expenses'] for k in sorted_keys]
+        
+        # Calculate running balance
+        # Find opening balance from the first transaction with balance data
+        balance_txns = [t for t in sorted_txns if t.get('balance') is not None and t.get('balance') != 0.0]
+        
+        if balance_txns:
+            first_balance_txn = balance_txns[0]
+            idx = sorted_txns.index(first_balance_txn)
+            cumulative_to_first = sum(t['amount'] for t in sorted_txns[:idx + 1])
+            opening_balance = first_balance_txn['balance'] - cumulative_to_first
+        else:
+            opening_balance = 0.0
+        
+        running_balance = []
+        cumulative = opening_balance
+        for k in sorted_keys:
+            cumulative += periods[k]['net']
+            running_balance.append(cumulative)
+        
+        # Build figure with secondary y-axis
         fig = go.Figure()
         
-        # Add income trace
-        fig.add_trace(go.Scatter(
-            x=months,
-            y=income_values,
-            mode='lines+markers',
+        # Income bars (green, above zero)
+        fig.add_trace(go.Bar(
+            x=labels,
+            y=income_vals,
             name='Income',
-            line=dict(color='green', width=3),
-            marker=dict(size=8)
+            marker_color='rgba(44, 160, 44, 0.75)',
+            hovertemplate=f'{self.currency_symbol}%{{y:,.2f}}<extra>Income</extra>'
         ))
         
-        # Add expenses trace
-        fig.add_trace(go.Scatter(
-            x=months,
-            y=expense_values,
-            mode='lines+markers',
+        # Expense bars (red, below zero)
+        fig.add_trace(go.Bar(
+            x=labels,
+            y=expense_vals,
             name='Expenses',
-            line=dict(color='red', width=3),
-            marker=dict(size=8)
+            marker_color='rgba(214, 39, 40, 0.75)',
+            hovertemplate=f'{self.currency_symbol}%{{y:,.2f}}<extra>Expenses</extra>'
         ))
         
-        # Add net income trace
-        net_values = [inc - exp for inc, exp in zip(income_values, expense_values)]
+        # Running balance line on secondary y-axis
         fig.add_trace(go.Scatter(
-            x=months,
-            y=net_values,
+            x=labels,
+            y=running_balance,
+            name='Balance',
             mode='lines+markers',
-            name='Net Income',
-            line=dict(color='blue', width=2, dash='dash'),
-            marker=dict(size=6)
+            line=dict(color='rgba(31, 119, 180, 0.9)', width=2.5),
+            marker=dict(size=5),
+            yaxis='y2',
+            hovertemplate=f'{self.currency_symbol}%{{y:,.2f}}<extra>Balance</extra>'
         ))
         
         fig.update_layout(
-            title="Monthly Income vs Expenses",
-            xaxis_title="Month",
-            yaxis_title=f"Amount ({self.currency_symbol})",
-            hovermode='x unified',
             template='plotly_white',
+            hovermode='x unified',
+            barmode='relative',
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
                 y=1.02,
                 xanchor="right",
                 x=1
-            )
+            ),
+            yaxis=dict(
+                tickprefix=self.currency_symbol,
+                zeroline=True,
+                zerolinecolor='rgba(128, 128, 128, 0.4)',
+                zerolinewidth=1,
+            ),
+            yaxis2=dict(
+                tickprefix=self.currency_symbol,
+                overlaying='y',
+                side='right',
+                showgrid=False,
+            ),
+            margin=dict(t=30, b=60),
         )
         
-        # Add zero line for reference
-        fig.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5)
+        if len(labels) > 12:
+            fig.update_xaxes(tickangle=45)
         
         return fig
     
@@ -1709,9 +1806,8 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
         # Store filtered data for callback access
         self._current_filtered_data = filtered_data
         
-        # Monthly trends chart
-        monthly_data = analyzer.calculate_monthly_summary(filtered_data)
-        monthly_trend_fig = self.create_monthly_trends_chart(monthly_data)
+        # Income & Expenses chart (callback-driven with weekly/monthly toggle)
+        income_expenses_fig = self.create_income_expenses_chart(filtered_data, 'monthly')
         
         # Category pie chart
         category_pie_fig = self.create_category_pie_chart(filtered_data)
@@ -1743,9 +1839,17 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
             dbc.Row([
                 dbc.Col([
                     dbc.Card([
-                        dbc.CardHeader("Monthly Income vs Expenses"),
+                        dbc.CardHeader([
+                            dbc.Row([
+                                dbc.Col(html.H5("Income & Expenses", className="mb-0"), width=8),
+                                dbc.Col(dbc.ButtonGroup([
+                                    dbc.Button("Weekly", id="income-exp-weekly-btn", color="outline-primary", size="sm", n_clicks=0),
+                                    dbc.Button("Monthly", id="income-exp-monthly-btn", color="primary", size="sm", n_clicks=0),
+                                ], size="sm", className="float-end"), width=4)
+                            ], align="center")
+                        ]),
                         dbc.CardBody([
-                            dcc.Graph(figure=monthly_trend_fig)
+                            dcc.Graph(id="income-expenses-chart", figure=income_expenses_fig)
                         ])
                     ])
                 ], width=6),
