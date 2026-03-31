@@ -1420,9 +1420,16 @@ class FinancialDashboard:
 
         tick_format = '%b %Y' if aggregation == 'monthly' else '%d %b'
 
+        # Tick values: only intermediate bars (exclude opening at [0] and closing at [-1])
+        intermediate_dates = waterfall_data['x'][1:-1]
+        step = max(1, len(intermediate_dates) // 12)
+        sampled_dates = intermediate_dates[::step]
+        tickvals = sampled_dates
+        ticktext = [d.strftime('%b %Y' if aggregation == 'monthly' else '%d %b') for d in sampled_dates]
+
         fig.update_layout(
             template='plotly_white',
-            hovermode='x unified',
+            hovermode='x',
             height=600,
             legend=dict(
                 orientation="h",
@@ -1433,7 +1440,9 @@ class FinancialDashboard:
             ),
             xaxis=dict(
                 type='date',
-                tickformat=tick_format,
+                tickmode='array',
+                tickvals=tickvals,
+                ticktext=ticktext,
                 tickangle=0,
             ),
             yaxis=dict(
