@@ -2916,6 +2916,9 @@ class FinancialDashboard:
         }
 
         # Build tables for expenses and income
+        all_entries = recurring_data['expenses'] + recurring_data['income']
+        dataset_end = max(e['last_date'] for e in all_entries) if all_entries else datetime.now()
+
         for label, entries, color_class in [
             ("Recurring Expenses", recurring_data['expenses'], "text-danger"),
             ("Recurring Income", recurring_data['income'], "text-success"),
@@ -2970,8 +2973,11 @@ class FinancialDashboard:
                         f"{self.currency_symbol}{e['annual_cost']:,.2f}",
                         className="text-end fw-bold"
                     ),
-                    html.Td(
+                    html.Td([
                         e['last_date'].strftime('%b %d, %Y'),
+                    ] + ([
+                        dbc.Badge("Inactive", color="danger", className="px-2 py-1 ms-2"),
+                    ] if (dataset_end - e['last_date']).days >= 2 * e['median_interval_days'] else []),
                         className="text-nowrap"
                     ),
                 ]))
