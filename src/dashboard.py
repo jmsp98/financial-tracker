@@ -1418,29 +1418,6 @@ class FinancialDashboard:
             customdata=waterfall_data['hover_data']
         ))
 
-        # Annotations for Opening and Closing balance labels (above their bars)
-        opening_x = waterfall_data['x'][0]
-        closing_x = waterfall_data['x'][-1]
-        opening_balance = waterfall_data['opening_balance']
-        closing_balance = waterfall_data['closing_balance']
-
-        for x_val, label, value in [
-            (opening_x, "Opening<br>Balance", opening_balance),
-            (closing_x, "Closing<br>Balance", closing_balance),
-        ]:
-            fig.add_annotation(
-                x=x_val,
-                y=value,
-                text=label,
-                showarrow=False,
-                yshift=18,
-                font=dict(size=10, color='#444'),
-                xanchor='center',
-                yanchor='bottom',
-                xref='x',
-                yref='y',
-            )
-
         tick_format = '%b %Y' if aggregation == 'monthly' else '%d %b'
 
         fig.update_layout(
