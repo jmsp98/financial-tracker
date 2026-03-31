@@ -1322,6 +1322,7 @@ class FinancialDashboard:
             'measure': [],
             'text': [],
             'hover_data': [],
+            'hover_colors': [],
             'opening_balance': opening_balance,
             'connector': {"line": {"color": "rgb(63, 63, 63)"}},
             'increasing': {"marker": {"color": "rgba(44, 160, 44, 0.75)"}},
@@ -1329,12 +1330,17 @@ class FinancialDashboard:
             'totals': {"marker": {"color": "rgba(31, 119, 180, 0.75)"}}
         }
 
+        _blue  = 'rgba(31, 119, 180, 0.6)'
+        _green = 'rgba(44, 160, 44, 0.6)'
+        _red   = 'rgba(214, 39, 40, 0.6)'
+
         # Opening balance bar
         waterfall_data['x'].append(opening_x)
         waterfall_data['y'].append(opening_balance)
         waterfall_data['measure'].append('absolute')
         waterfall_data['text'].append(f"{self.currency_symbol}{opening_balance:,.2f}")
         waterfall_data['hover_data'].append(f"Opening Balance: {self.currency_symbol}{opening_balance:,.2f}")
+        waterfall_data['hover_colors'].append(_blue)
 
         # Period bars
         for period_key, period_data in sorted_periods:
@@ -1368,8 +1374,7 @@ class FinancialDashboard:
                     hover_info += f"<br>• {txn['description'][:30]}... {self.currency_symbol}{txn['amount']:+.2f}"
 
             waterfall_data['hover_data'].append(hover_info)
-
-        # Closing balance bar
+            waterfall_data['hover_colors'].append(_green if net_flow > 0 else _red)
         total_net_flow = sum(pd['net_flow'] for _, pd in sorted_periods if pd['net_flow'] != 0)
         closing_balance = opening_balance + total_net_flow
         waterfall_data['closing_balance'] = closing_balance
@@ -1395,6 +1400,7 @@ class FinancialDashboard:
             else:
                 hover_info += f"<br>⚠️ Differs from latest balance: {self.currency_symbol}{latest_balance:,.2f}"
         waterfall_data['hover_data'].append(hover_info)
+        waterfall_data['hover_colors'].append(_blue)
 
         return waterfall_data
     
@@ -1415,7 +1421,11 @@ class FinancialDashboard:
             decreasing=waterfall_data['decreasing'],
             totals=waterfall_data['totals'],
             hovertemplate="%{customdata}<extra></extra>",
-            customdata=waterfall_data['hover_data']
+            customdata=waterfall_data['hover_data'],
+            hoverlabel=dict(
+                bgcolor=waterfall_data['hover_colors'],
+                font=dict(color='#333'),
+            ),
         ))
 
         tick_format = '%b %Y' if aggregation == 'monthly' else '%d %b'
@@ -1447,10 +1457,6 @@ class FinancialDashboard:
             ),
             yaxis=dict(
                 tickprefix=self.currency_symbol,
-            ),
-            hoverlabel=dict(
-                bgcolor='rgba(255, 255, 255, 0.75)',
-                font=dict(color='#333'),
             ),
             margin=dict(l=60, r=60, t=30, b=60)
         )
