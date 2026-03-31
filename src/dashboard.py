@@ -45,6 +45,38 @@ class FinancialDashboard:
         self.setup_layout()
         self.setup_callbacks()
     
+    def _fmt_signed(self, value, decimals=2, commas=True):
+        """Format a monetary value with sign before the currency symbol.
+        
+        Returns e.g. '+£1,234.56', '-£500.00', or '£0.00'.
+        """
+        if commas:
+            formatted = f"{abs(value):,.{decimals}f}"
+        else:
+            formatted = f"{abs(value):.{decimals}f}"
+        if value > 0:
+            return f"+{self.currency_symbol}{formatted}"
+        elif value < 0:
+            return f"-{self.currency_symbol}{formatted}"
+        return f"{self.currency_symbol}{formatted}"
+
+    @staticmethod
+    def _ordinal(day):
+        """Return day with ordinal suffix: 1st, 2nd, 3rd, 4th, ..."""
+        if 11 <= day <= 13:
+            return f"{day}th"
+        return f"{day}{['th','st','nd','rd','th','th','th','th','th','th'][day % 10]}"
+
+    def _fmt_hover_date(self, dt, aggregation):
+        """Format a date for hover popup headers.
+        
+        Monthly:      'January 2025'
+        Weekly/Daily: 'October 1st 2025'
+        """
+        if aggregation == 'monthly':
+            return dt.strftime('%B %Y')
+        return f"{dt.strftime('%B')} {self._ordinal(dt.day)} {dt.year}"
+
     def _get_cache_meta_path(self):
         """Return the path to the cache metadata file."""
         categorized_path = config.get('data.categorized', './data/categorized')
@@ -436,9 +468,9 @@ class FinancialDashboard:
                 
                 return (
                     "N/A",
-                    f"{self.currency_symbol}{total_income:,.2f}", 
+                    f"+{self.currency_symbol}{total_income:,.2f}", 
                     f"{self.currency_symbol}{total_expenses:,.2f}",
-                    html.Span(f"{self.currency_symbol}{net_flow:,.2f}", 
+                    html.Span(self._fmt_signed(net_flow), 
                              className="text-success" if net_flow >= 0 else "text-danger"),
                     "N/A",
                     f"{len(filtered_data):,}",
@@ -466,9 +498,9 @@ class FinancialDashboard:
             
             # Format values
             starting_str = f"{self.currency_symbol}{starting_balance:,.2f}"
-            income_str = f"{self.currency_symbol}{total_income:,.2f}"
+            income_str = f"+{self.currency_symbol}{total_income:,.2f}"
             expenses_str = f"{self.currency_symbol}{total_expenses:,.2f}"
-            net_str = f"{self.currency_symbol}{net_flow:,.2f}"
+            net_str = self._fmt_signed(net_flow)
             ending_str = f"{self.currency_symbol}{ending_balance:,.2f}"
             net_color = "text-success" if net_flow >= 0 else "text-danger"
             
@@ -1110,15 +1142,22 @@ class FinancialDashboard:
         blue = 'rgba(31, 119, 180, 0.9)'
         if aggregation == 'weekly':
             tick_format = '%b %d, %y'
+            hover_format = '%B %-d, %Y'
             # Show roughly every 4 weeks to avoid crowding
             n_weeks = len(x_dates)
             dtick = max(1, round(n_weeks / 8)) * 7 * 24 * 3600000  # ms
         else:
             tick_format = '%b %y'
+            hover_format = '%B %Y'
             dtick = 'M1'
         
         # Build figure with secondary y-axis
         fig = go.Figure()
+        
+        # Pre-format hover text with sign before currency symbol
+        income_hover = [self._fmt_signed(v) for v in income_vals]
+        expense_hover = [self._fmt_signed(v) for v in expense_vals]
+        balance_hover = [f"{self.currency_symbol}{v:,.2f}" for v in running_balance]
         
         # Income bars (green, above zero)
         fig.add_trace(go.Bar(
@@ -1126,7 +1165,8 @@ class FinancialDashboard:
             y=income_vals,
             name='Income',
             marker_color='rgba(44, 160, 44, 0.75)',
-            hovertemplate=f'{self.currency_symbol}%{{y:,.2f}}<extra>Income</extra>'
+            customdata=income_hover,
+            hovertemplate='%{customdata}<extra>Income</extra>'
         ))
         
         # Expense bars (red, below zero)
@@ -1135,7 +1175,8 @@ class FinancialDashboard:
             y=expense_vals,
             name='Expenses',
             marker_color='rgba(214, 39, 40, 0.75)',
-            hovertemplate=f'{self.currency_symbol}%{{y:,.2f}}<extra>Expenses</extra>'
+            customdata=expense_hover,
+            hovertemplate='%{customdata}<extra>Expenses</extra>'
         ))
         
         # Running balance line on secondary y-axis
@@ -1147,7 +1188,8 @@ class FinancialDashboard:
             line=dict(color=blue, width=2.5),
             marker=dict(size=5),
             yaxis='y2',
-            hovertemplate=f'{self.currency_symbol}%{{y:,.2f}}<extra>Balance</extra>'
+            customdata=balance_hover,
+            hovertemplate='%{customdata}<extra>Balance</extra>'
         ))
         
         fig.update_layout(
@@ -1166,7 +1208,7 @@ class FinancialDashboard:
                 tickformat=tick_format,
                 dtick=dtick,
                 tickangle=0,
-                hoverformat='%b %d, %Y',
+                hoverformat=hover_format,
             ),
             yaxis=dict(
                 tickprefix=self.currency_symbol,
@@ -1269,24 +1311,30 @@ class FinancialDashboard:
         """Create aggregated waterfall data for specified period type."""
         from collections import defaultdict
 
+        # Ensure dates are datetime objects and find first/last transaction dates
+        all_txn_dates = []
+        for txn in transactions:
+            if isinstance(txn['date'], str):
+                txn['date'] = datetime.fromisoformat(txn['date'])
+            all_txn_dates.append(txn['date'])
+        first_txn_date = min(all_txn_dates)
+        last_txn_date = max(all_txn_dates)
+
         # Group transactions by period
         periods = defaultdict(lambda: {'income': [], 'expenses': [], 'net_flow': 0})
 
         for txn in transactions:
-            txn_date = txn['date'] if isinstance(txn['date'], datetime) else datetime.fromisoformat(txn['date'])
+            txn_date = txn['date']
 
             if aggregation == 'daily':
                 period_key = txn_date.strftime('%Y-%m-%d')
-                period_label = txn_date.strftime('%b %d, %Y')
                 canonical_date = txn_date.replace(hour=0, minute=0, second=0, microsecond=0)
             elif aggregation == 'weekly':
                 week_start = txn_date - timedelta(days=txn_date.weekday())
                 period_key = week_start.strftime('%Y-W%U')
-                period_label = week_start.strftime('%b %d, %Y')
                 canonical_date = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
-            else:  # monthly
+            else:  # monthly — use 1st-of-month as canonical x position
                 period_key = txn_date.strftime('%Y-%m')
-                period_label = txn_date.strftime('%b %d, %Y')
                 canonical_date = txn_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
             if txn['amount'] > 0:
@@ -1295,8 +1343,11 @@ class FinancialDashboard:
                 periods[period_key]['expenses'].append(txn)
 
             periods[period_key]['net_flow'] += txn['amount']
-            periods[period_key]['period_label'] = period_label
             periods[period_key]['period_date'] = canonical_date
+
+        # Generate period labels using _fmt_hover_date
+        for period_key, period_data in periods.items():
+            period_data['period_label'] = self._fmt_hover_date(period_data['period_date'], aggregation)
 
         # Sort periods chronologically
         sorted_periods = sorted(periods.items(), key=lambda x: x[1]['period_date'])
@@ -1311,9 +1362,13 @@ class FinancialDashboard:
             opening_x = first_date - timedelta(weeks=1)
             closing_x = last_date + timedelta(weeks=1)
         else:
-            # One month before/after
+            # One month before/after (1st-of-month positions)
             opening_x = (first_date.replace(day=1) - timedelta(days=1)).replace(day=1)
             closing_x = (last_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+        # Format opening/closing date labels using actual first/last transaction dates
+        opening_date_label = self._fmt_hover_date(first_txn_date, aggregation)
+        closing_date_label = self._fmt_hover_date(last_txn_date, aggregation)
 
         waterfall_data = {
             'x': [],
@@ -1338,10 +1393,11 @@ class FinancialDashboard:
         waterfall_data['y'].append(opening_balance)
         waterfall_data['measure'].append('absolute')
         waterfall_data['text'].append(f"{self.currency_symbol}{opening_balance:,.2f}")
-        waterfall_data['hover_data'].append(f"Opening Balance: {self.currency_symbol}{opening_balance:,.2f}")
+        waterfall_data['hover_data'].append(f"<b>{opening_date_label}</b><br>Opening Balance: {self.currency_symbol}{opening_balance:,.2f}")
         waterfall_data['hover_colors'].append(_blue)
 
         # Period bars
+        running_balance = opening_balance
         for period_key, period_data in sorted_periods:
             if period_data['net_flow'] == 0:
                 continue
@@ -1351,18 +1407,22 @@ class FinancialDashboard:
             waterfall_data['measure'].append('relative')
 
             net_flow = period_data['net_flow']
-            waterfall_data['text'].append(f"{self.currency_symbol}{net_flow:+,.2f}")
+            running_balance += net_flow
+            waterfall_data['text'].append(self._fmt_signed(net_flow))
 
             income_count = len(period_data['income'])
             expense_count = len(period_data['expenses'])
             income_total = sum(t['amount'] for t in period_data['income'])
             expense_total = sum(abs(t['amount']) for t in period_data['expenses'])
+            income_txn_word = 'transaction' if income_count == 1 else 'transactions'
+            expense_txn_word = 'transaction' if expense_count == 1 else 'transactions'
 
             hover_info = (
                 f"<b>{period_data['period_label']}</b><br>"
-                f"Net Flow: {self.currency_symbol}{net_flow:+,.2f}<br>"
-                f"Income: {income_count} transactions ({self.currency_symbol}{income_total:,.2f})<br>"
-                f"Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2f})"
+                f"Balance: {self.currency_symbol}{running_balance:,.2f}<br>"
+                f"Net Flow: {self._fmt_signed(net_flow)}<br>"
+                f"Income: {income_count} {income_txn_word} ({self.currency_symbol}{income_total:,.2f})<br>"
+                f"Expenses: {expense_count} {expense_txn_word} ({self.currency_symbol}{expense_total:,.2f})"
             )
 
             all_period_txns = period_data['income'] + period_data['expenses']
@@ -1370,7 +1430,7 @@ class FinancialDashboard:
             if top_txns:
                 hover_info += "<br><br>Top Transactions:"
                 for txn in top_txns:
-                    hover_info += f"<br>• {txn['description'][:30]}... {self.currency_symbol}{txn['amount']:+.2f}"
+                    hover_info += f"<br>{self._fmt_signed(txn['amount'], commas=False)}: {txn['description']}"
 
             waterfall_data['hover_data'].append(hover_info)
             waterfall_data['hover_colors'].append(_green if net_flow > 0 else _red)
@@ -1391,7 +1451,7 @@ class FinancialDashboard:
         waterfall_data['measure'].append('total')
         waterfall_data['text'].append(f"{self.currency_symbol}{closing_balance:,.2f}")
 
-        hover_info = f"Closing Balance: {self.currency_symbol}{closing_balance:,.2f}<br>Net Change: {self.currency_symbol}{total_net_flow:+,.2f}"
+        hover_info = f"<b>{closing_date_label}</b><br>Closing Balance: {self.currency_symbol}{closing_balance:,.2f}<br>Net Change: {self._fmt_signed(total_net_flow)}"
         if latest_balance is not None:
             balance_diff = abs(closing_balance - latest_balance)
             if balance_diff < 0.01:
@@ -1437,8 +1497,10 @@ class FinancialDashboard:
             if aggregation == 'monthly':
                 tick_fmt = '%b %y'
                 tickvals = []
+                # Generate 1st-of-month tick positions to align with bars
                 cursor = first.replace(day=1)
-                while cursor <= last:
+                last_1st = last.replace(day=1)
+                while cursor <= last_1st:
                     tickvals.append(cursor)
                     if cursor.month == 12:
                         cursor = cursor.replace(year=cursor.year + 1, month=1)
