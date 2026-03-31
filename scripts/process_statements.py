@@ -64,10 +64,6 @@ def process_pdf_file(pdf_path: str, extractor: PDFExtractor) -> dict:
             # Add new fields if available
             if hasattr(txn, 'payment_method') and txn.payment_method:
                 transaction_dict['payment_method'] = txn.payment_method
-            if hasattr(txn, 'merchant') and txn.merchant:
-                transaction_dict['merchant'] = txn.merchant
-            if hasattr(txn, 'location') and txn.location:
-                transaction_dict['location'] = txn.location
             if hasattr(txn, 'reference') and txn.reference:
                 transaction_dict['reference'] = txn.reference
                 

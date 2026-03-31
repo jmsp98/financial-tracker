@@ -31,8 +31,8 @@ def create_sample_transactions():
             balance=1234.33,
             transaction_type="debit",
             payment_method="VIS",
-            merchant="Tesco",
-            location="London",
+            merchant="VIS TESCO STORE",
+            location=None,
             raw_description="VIS TESCO STORE LONDON"
         ),
         Transaction(
@@ -42,8 +42,8 @@ def create_sample_transactions():
             balance=1229.83,
             transaction_type="debit", 
             payment_method="))))",
-            merchant="Starbucks",
-            location="Central London",
+            merchant="))) STARBUCKS COFFEE",
+            location=None,
             raw_description="))) STARBUCKS COFFEE CENTRAL LONDON"
         ),
         Transaction(
@@ -53,8 +53,8 @@ def create_sample_transactions():
             balance=1140.38,
             transaction_type="debit",
             payment_method="DD",
-            merchant="British Gas",
-            location="",
+            merchant="DD BRITISH GAS",
+            location=None,
             raw_description="DD BRITISH GAS"
         ),
         Transaction(
@@ -64,8 +64,8 @@ def create_sample_transactions():
             balance=3640.38,
             transaction_type="credit",
             payment_method="CR",
-            merchant="Employer",
-            location="",
+            merchant="CR SALARY PAYMENT",
+            location=None,
             raw_description="CR SALARY PAYMENT"
         ),
         Transaction(
@@ -75,8 +75,8 @@ def create_sample_transactions():
             balance=3610.39,
             transaction_type="debit",
             payment_method="VIS",
-            merchant="Amazon",
-            location="Online",
+            merchant="VIS AMAZON.CO.UK",
+            location=None,
             raw_description="VIS AMAZON.CO.UK ONLINE"
         )
     ]

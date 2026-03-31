@@ -546,11 +546,6 @@ class AdvancedHSBCParser(BaseBankParser):
         
         final_payment_method = payment_type if payment_type else extracted_payment
         
-        # Extract merchant and location from full text (all lines) for accuracy
-        merchant, location = self.extract_merchant_and_location(
-            ' '.join(filter(None, [cleaned_description, reference_text]))
-        )
-        
         return Transaction(
             date=transaction_date,
             description=cleaned_description,
@@ -558,8 +553,8 @@ class AdvancedHSBCParser(BaseBankParser):
             balance=balance,
             transaction_type=transaction_type,
             payment_method=final_payment_method,
-            merchant=merchant,
-            location=location,
+            merchant=cleaned_description,
+            location=None,
             raw_description=raw_description,
             reference=reference_text
         )

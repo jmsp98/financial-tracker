@@ -62,8 +62,6 @@ class PureMLTransactionFeatureExtractor:
                 'is_debit': float(txn.amount) < 0,
                 'is_credit': float(txn.amount) > 0,
                 'payment_method': txn.payment_method or 'unknown',
-                'merchant': txn.merchant or '',
-                'location': txn.location or '',
             }
             
             # Amount-based features
@@ -279,13 +277,12 @@ class PureMLCategorizer:
     def _prepare_features(self, features_df: pd.DataFrame) -> np.ndarray:
         """Convert feature DataFrame to ML-ready array."""
         # Separate text and numeric features
-        text_features = ['description', 'merchant', 'location', 'payment_method']  # Include payment_method as text feature
+        text_features = ['description', 'payment_method']
         numeric_features = [col for col in features_df.columns if col not in text_features]
         
         # Combine text for TF-IDF
         combined_text = (features_df['description'].fillna('') + ' ' + 
-                        features_df['merchant'].fillna('') + ' ' +
-                        features_df['location'].fillna('')).str.strip()
+                        features_df['payment_method'].fillna('')).str.strip()
         
         # Fit TF-IDF on first call
         if not self.tfidf_fitted:
@@ -404,8 +401,6 @@ class PureMLCategorizer:
                 'balance': transaction.balance,
                 'transaction_type': transaction.transaction_type,
                 'payment_method': transaction.payment_method,
-                'merchant': transaction.merchant,
-                'location': transaction.location,
                 'reference': transaction.reference if hasattr(transaction, 'reference') else None,
                 'category': category,
                 'subcategory': subcategory,

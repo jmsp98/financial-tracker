@@ -149,8 +149,6 @@ class TrainingDataCreator:
                                 'subcategory': txn.get('subcategory', ''),
                                 'amount': txn.get('amount', 0),
                                 'date': txn.get('date', ''),
-                                'merchant': txn.get('merchant', ''),
-                                'location': txn.get('location', ''),
                                 'payment_method': txn.get('payment_method', ''),
                             })
                     

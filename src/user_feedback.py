@@ -151,8 +151,8 @@ class UserFeedbackManager:
                         balance=item.get('balance'),
                         transaction_type=item.get('type', 'debit' if item['amount'] < 0 else 'credit'),
                         payment_method=item.get('payment_method'),
-                        merchant=item.get('merchant', item['description']),
-                        location=item.get('location'),
+                        merchant=item['description'],
+                        location=None,
                         raw_description=item['description']
                     )
                     

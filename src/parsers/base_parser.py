@@ -237,48 +237,6 @@ class BaseBankParser(ABC):
         
         return cleaned_description, extracted_payment_method
 
-    def extract_merchant_and_location(self, description: str) -> Tuple[str, Optional[str]]:
-        """
-        Extract merchant name and location from transaction description.
-        
-        Note: This method now expects pre-cleaned descriptions (payment method codes already removed).
-        
-        Args:
-            description: Clean transaction description (no payment method prefixes)
-            
-        Returns:
-            Tuple of (merchant, location)
-        """
-        if not description:
-            return "", None
-            
-        cleaned = description.strip()
-        
-        # Try to split on location patterns
-        # Pattern: MERCHANT NAME LOCATION
-        parts = cleaned.split()
-        
-        if len(parts) <= 1:
-            return cleaned, None
-        
-        # Look for common location indicators
-        location_indicators = ['CITY', 'TOWN', 'LOCATION', 'AREA', 'CENTER', 'DISTRICT', 'LONDON', 'OXFORD', 'BARNES']
-        
-        for i, part in enumerate(parts):
-            if part.upper() in location_indicators:
-                merchant = ' '.join(parts[:i]).strip()
-                location = ' '.join(parts[i:]).strip()
-                return merchant, location if location else None
-        
-        # If no clear location found, treat last 1-2 words as potential location
-        # Common pattern: "MERCHANT NAME CITY" or "MERCHANT LOCATION"
-        if len(parts) > 3:
-            merchant = ' '.join(parts[:-1]).strip()
-            location = parts[-1]
-            return merchant, location
-        else:
-            return cleaned, None
-    
     def validate_transaction(self, transaction: Transaction) -> bool:
         """
         Validate that a transaction has required fields and makes sense.

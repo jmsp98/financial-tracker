@@ -188,8 +188,6 @@ class FinancialDashboard:
                     'balance': txn.balance,
                     'transaction_type': txn.transaction_type,
                     'payment_method': txn.payment_method,
-                    'merchant': txn.merchant,
-                    'location': txn.location,
                     'raw_description': txn.raw_description,
                     'reference': txn.reference
                 })

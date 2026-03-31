@@ -99,8 +99,6 @@ def load_training_data() -> List[Dict]:
                     'subcategory': entry.get('corrected_subcategory', ''),
                     'amount': entry.get('amount', 0),
                     'date': entry.get('transaction_date', ''),
-                    'merchant': '',
-                    'location': '',
                     'payment_method': '',
                     'source': 'user_feedback'
                 })
@@ -154,8 +152,8 @@ def convert_to_transactions(transaction_dicts: List[Dict]) -> List[Transaction]:
                 balance=txn_dict.get('balance'),
                 transaction_type=txn_dict['type'],
                 payment_method=txn_dict.get('payment_method'),
-                merchant=txn_dict.get('merchant', txn_dict['description']),
-                location=txn_dict.get('location'),
+                merchant=txn_dict['description'],
+                location=None,
                 raw_description=txn_dict['description']
             )
             
@@ -309,8 +307,8 @@ def main_with_training_data(training_data: List[Dict]) -> bool:
                     balance=None,
                     transaction_type='debit' if float(item.get('amount', 0)) < 0 else 'credit',
                     payment_method=item.get('payment_method', ''),
-                    merchant=item.get('merchant', ''),
-                    location=item.get('location', ''),
+                    merchant=item.get('description', ''),
+                    location=None,
                     raw_description=item.get('description', '')
                 )
                 
