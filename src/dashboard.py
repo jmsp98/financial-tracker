@@ -1324,9 +1324,9 @@ class FinancialDashboard:
             'hover_data': [],
             'opening_balance': opening_balance,
             'connector': {"line": {"color": "rgb(63, 63, 63)"}},
-            'increasing': {"marker": {"color": "green"}},
-            'decreasing': {"marker": {"color": "red"}},
-            'totals': {"marker": {"color": "blue"}}
+            'increasing': {"marker": {"color": "rgba(44, 160, 44, 0.75)"}},
+            'decreasing': {"marker": {"color": "rgba(214, 39, 40, 0.75)"}},
+            'totals': {"marker": {"color": "rgba(31, 119, 180, 0.75)"}}
         }
 
         # Opening balance bar
@@ -1447,6 +1447,10 @@ class FinancialDashboard:
             ),
             yaxis=dict(
                 tickprefix=self.currency_symbol,
+            ),
+            hoverlabel=dict(
+                bgcolor='rgba(255, 255, 255, 0.75)',
+                font=dict(color='#333'),
             ),
             margin=dict(l=60, r=60, t=30, b=60)
         )
