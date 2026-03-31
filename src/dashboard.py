@@ -1269,132 +1269,139 @@ class FinancialDashboard:
     def _create_aggregated_waterfall_data(self, transactions, opening_balance, aggregation='daily'):
         """Create aggregated waterfall data for specified period type."""
         from collections import defaultdict
-        
+
         # Group transactions by period
         periods = defaultdict(lambda: {'income': [], 'expenses': [], 'net_flow': 0})
-        
+
         for txn in transactions:
-            # Handle datetime
             txn_date = txn['date'] if isinstance(txn['date'], datetime) else datetime.fromisoformat(txn['date'])
-            
-            # Determine period key based on aggregation
+
             if aggregation == 'daily':
                 period_key = txn_date.strftime('%Y-%m-%d')
                 period_label = txn_date.strftime('%d %b')
+                canonical_date = txn_date.replace(hour=0, minute=0, second=0, microsecond=0)
             elif aggregation == 'weekly':
-                # Week starting Monday
                 week_start = txn_date - timedelta(days=txn_date.weekday())
                 period_key = week_start.strftime('%Y-W%U')
                 period_label = week_start.strftime('%d %b')
+                canonical_date = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
             else:  # monthly
                 period_key = txn_date.strftime('%Y-%m')
                 period_label = txn_date.strftime('%b %Y')
-            
-            # Store transaction details
+                canonical_date = txn_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
             if txn['amount'] > 0:
                 periods[period_key]['income'].append(txn)
             else:
                 periods[period_key]['expenses'].append(txn)
-            
+
             periods[period_key]['net_flow'] += txn['amount']
             periods[period_key]['period_label'] = period_label
-            periods[period_key]['period_date'] = txn_date
-        
+            periods[period_key]['period_date'] = canonical_date
+
         # Sort periods chronologically
         sorted_periods = sorted(periods.items(), key=lambda x: x[1]['period_date'])
-        
-        # Create waterfall segments
+
+        # Compute Opening/Closing x positions just outside the data range
+        first_date = sorted_periods[0][1]['period_date']
+        last_date = sorted_periods[-1][1]['period_date']
+        if aggregation == 'daily':
+            opening_x = first_date - timedelta(days=1)
+            closing_x = last_date + timedelta(days=1)
+        elif aggregation == 'weekly':
+            opening_x = first_date - timedelta(weeks=1)
+            closing_x = last_date + timedelta(weeks=1)
+        else:
+            # One month before/after
+            opening_x = (first_date.replace(day=1) - timedelta(days=1)).replace(day=1)
+            closing_x = (last_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+
         waterfall_data = {
-            'x': [],  # Period labels
-            'y': [],  # Amounts (opening balance + net flows)
-            'measure': [],  # absolute for opening, relative for changes
-            'text': [],  # Display text
-            'hover_data': [],  # Detailed hover information
+            'x': [],
+            'y': [],
+            'measure': [],
+            'text': [],
+            'hover_data': [],
+            'opening_balance': opening_balance,
             'connector': {"line": {"color": "rgb(63, 63, 63)"}},
             'increasing': {"marker": {"color": "green"}},
             'decreasing': {"marker": {"color": "red"}},
             'totals': {"marker": {"color": "blue"}}
         }
-        
-        # Opening balance
-        waterfall_data['x'].append('Opening\nBalance')
+
+        # Opening balance bar
+        waterfall_data['x'].append(opening_x)
         waterfall_data['y'].append(opening_balance)
         waterfall_data['measure'].append('absolute')
         waterfall_data['text'].append(f"{self.currency_symbol}{opening_balance:,.2f}")
         waterfall_data['hover_data'].append(f"Opening Balance: {self.currency_symbol}{opening_balance:,.2f}")
-        
-        # Add each period's net flow
+
+        # Period bars
         for period_key, period_data in sorted_periods:
             if period_data['net_flow'] == 0:
-                continue  # Skip periods with no net change
-                
-            waterfall_data['x'].append(period_data['period_label'])
+                continue
+
+            waterfall_data['x'].append(period_data['period_date'])
             waterfall_data['y'].append(period_data['net_flow'])
             waterfall_data['measure'].append('relative')
-            
-            # Format text
+
             net_flow = period_data['net_flow']
-            text = f"{self.currency_symbol}{net_flow:+,.2f}"
-            waterfall_data['text'].append(text)
-            
-            # Create detailed hover info
+            waterfall_data['text'].append(f"{self.currency_symbol}{net_flow:+,.2f}")
+
             income_count = len(period_data['income'])
             expense_count = len(period_data['expenses'])
             income_total = sum(t['amount'] for t in period_data['income'])
             expense_total = sum(abs(t['amount']) for t in period_data['expenses'])
-            
-            hover_info = f"""<b>{period_data['period_label']}</b><br>
-Net Flow: {self.currency_symbol}{net_flow:+,.2f}<br>
-Income: {income_count} transactions ({self.currency_symbol}{income_total:,.2f})<br>
-Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2f})"""
-            
-            # Add top transactions for this period
+
+            hover_info = (
+                f"<b>{period_data['period_label']}</b><br>"
+                f"Net Flow: {self.currency_symbol}{net_flow:+,.2f}<br>"
+                f"Income: {income_count} transactions ({self.currency_symbol}{income_total:,.2f})<br>"
+                f"Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2f})"
+            )
+
             all_period_txns = period_data['income'] + period_data['expenses']
             top_txns = sorted(all_period_txns, key=lambda x: abs(x['amount']), reverse=True)[:3]
-            
             if top_txns:
                 hover_info += "<br><br>Top Transactions:"
                 for txn in top_txns:
                     hover_info += f"<br>• {txn['description'][:30]}... {self.currency_symbol}{txn['amount']:+.2f}"
-            
+
             waterfall_data['hover_data'].append(hover_info)
-        
-        # Add closing balance (total)
-        total_net_flow = sum(period_data['net_flow'] for _, period_data in sorted_periods if period_data['net_flow'] != 0)
+
+        # Closing balance bar
+        total_net_flow = sum(pd['net_flow'] for _, pd in sorted_periods if pd['net_flow'] != 0)
         closing_balance = opening_balance + total_net_flow
-        
-        # Find the latest transaction's actual balance for validation (if available)
+        waterfall_data['closing_balance'] = closing_balance
+
         latest_balance = None
         if transactions:
-            # Sort transactions by date to find the latest one with balance data
             sorted_txns = sorted(transactions, key=lambda x: x['date'] if isinstance(x['date'], datetime) else datetime.fromisoformat(x['date']))
             for txn in reversed(sorted_txns):
                 if txn.get('balance') is not None and txn.get('balance') != 0:
                     latest_balance = txn['balance']
                     break
-        
-        waterfall_data['x'].append('Closing\nBalance')
+
+        waterfall_data['x'].append(closing_x)
         waterfall_data['y'].append(closing_balance)
         waterfall_data['measure'].append('total')
         waterfall_data['text'].append(f"{self.currency_symbol}{closing_balance:,.2f}")
-        
-        # Enhanced hover with validation info
+
         hover_info = f"Closing Balance: {self.currency_symbol}{closing_balance:,.2f}<br>Net Change: {self.currency_symbol}{total_net_flow:+,.2f}"
         if latest_balance is not None:
             balance_diff = abs(closing_balance - latest_balance)
             if balance_diff < 0.01:
-                hover_info += f"<br>✅ Validated against latest transaction balance"
+                hover_info += "<br>✅ Validated against latest transaction balance"
             else:
                 hover_info += f"<br>⚠️ Differs from latest balance: {self.currency_symbol}{latest_balance:,.2f}"
         waterfall_data['hover_data'].append(hover_info)
-        
+
         return waterfall_data
     
     def _build_traditional_waterfall(self, waterfall_data, aggregation='daily'):
         """Build the traditional waterfall chart with plotly."""
         fig = go.Figure()
-        
-        # Create waterfall chart
+
         fig.add_trace(go.Waterfall(
             name="Balance Flow",
             orientation="v",
@@ -1410,20 +1417,32 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
             hovertemplate="%{customdata}<extra></extra>",
             customdata=waterfall_data['hover_data']
         ))
-        
-        # Compute tick subset — always show Opening/Closing, sample ~12 intermediate labels
-        # Drop indices adjacent to Opening (1) and Closing (n-2) to avoid label overlap
-        all_labels = waterfall_data['x']
-        n = len(all_labels)
-        intermediate_indices = list(range(1, n - 1))  # exclude first (Opening) and last (Closing)
-        target_ticks = 12
-        step = max(1, len(intermediate_indices) // target_ticks)
-        sampled = intermediate_indices[::step]
-        # Remove any sampled tick that sits immediately next to Opening or Closing
-        sampled = [i for i in sampled if i != 1 and i != n - 2]
-        tick_indices = [0] + sampled + [n - 1]
-        tickvals = [all_labels[i] for i in tick_indices]
-        
+
+        # Annotations for Opening and Closing balance labels (above their bars)
+        opening_x = waterfall_data['x'][0]
+        closing_x = waterfall_data['x'][-1]
+        opening_balance = waterfall_data['opening_balance']
+        closing_balance = waterfall_data['closing_balance']
+
+        for x_val, label, value in [
+            (opening_x, "Opening<br>Balance", opening_balance),
+            (closing_x, "Closing<br>Balance", closing_balance),
+        ]:
+            fig.add_annotation(
+                x=x_val,
+                y=value,
+                text=label,
+                showarrow=False,
+                yshift=18,
+                font=dict(size=10, color='#444'),
+                xanchor='center',
+                yanchor='bottom',
+                xref='x',
+                yref='y',
+            )
+
+        tick_format = '%b %Y' if aggregation == 'monthly' else '%d %b'
+
         fig.update_layout(
             template='plotly_white',
             hovermode='x unified',
@@ -1436,8 +1455,8 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
                 x=1
             ),
             xaxis=dict(
-                tickmode='array',
-                tickvals=tickvals,
+                type='date',
+                tickformat=tick_format,
                 tickangle=0,
             ),
             yaxis=dict(
@@ -1445,7 +1464,7 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
             ),
             margin=dict(l=60, r=60, t=30, b=60)
         )
-        
+
         return fig
     
     def _create_empty_chart(self, message):
@@ -1458,7 +1477,6 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
             showarrow=False, font=dict(size=16)
         )
         fig.update_layout(
-            title="Daily Transaction Waterfall",
             template='plotly_white',
             height=400
         )
@@ -1927,7 +1945,7 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
                         dbc.CardHeader([
                             dbc.Row([
                                 dbc.Col([
-                                    html.H5("Daily Transaction Waterfall - Latest 6 Months", className="mb-0")
+                                    html.H5("Transaction Waterfall", className="mb-0")
                                 ], width=8),
                                 dbc.Col([
                                     dbc.ButtonGroup([
