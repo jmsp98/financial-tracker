@@ -1411,18 +1411,17 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
             customdata=waterfall_data['hover_data']
         ))
         
-        # Dynamic title based on aggregation
-        title_map = {
-            'daily': 'Daily Transaction Waterfall - Latest 6 Months',
-            'weekly': 'Weekly Transaction Waterfall - Latest 6 Months', 
-            'monthly': 'Monthly Transaction Waterfall - Latest 6 Months'
-        }
+        # Compute tick subset — always show Opening/Closing, sample ~12 intermediate labels
+        all_labels = waterfall_data['x']
+        n = len(all_labels)
+        intermediate_indices = list(range(1, n - 1))  # exclude first (Opening) and last (Closing)
+        target_ticks = 12
+        step = max(1, len(intermediate_indices) // target_ticks)
+        sampled = intermediate_indices[::step]
+        tick_indices = [0] + sampled + [n - 1]
+        tickvals = [all_labels[i] for i in tick_indices]
         
-        # Configure layout
         fig.update_layout(
-            title=title_map.get(aggregation, 'Transaction Waterfall'),
-            xaxis_title="Period",
-            yaxis_title=f"Amount ({self.currency_symbol})",
             template='plotly_white',
             hovermode='x unified',
             height=600,
@@ -1433,12 +1432,16 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
                 xanchor="right",
                 x=1
             ),
-            margin=dict(l=60, r=60, t=80, b=100)
+            xaxis=dict(
+                tickmode='array',
+                tickvals=tickvals,
+                tickangle=0,
+            ),
+            yaxis=dict(
+                tickprefix=self.currency_symbol,
+            ),
+            margin=dict(l=60, r=60, t=30, b=60)
         )
-        
-        # Optimize x-axis for readability
-        if len(waterfall_data['x']) > 15:
-            fig.update_xaxes(tickangle=45)
         
         return fig
     
