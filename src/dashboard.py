@@ -1285,7 +1285,7 @@ class FinancialDashboard:
                 # Week starting Monday
                 week_start = txn_date - timedelta(days=txn_date.weekday())
                 period_key = week_start.strftime('%Y-W%U')
-                period_label = f"Week {week_start.strftime('%d %b')}"
+                period_label = week_start.strftime('%d %b')
             else:  # monthly
                 period_key = txn_date.strftime('%Y-%m')
                 period_label = txn_date.strftime('%b %Y')
@@ -1317,7 +1317,7 @@ class FinancialDashboard:
         }
         
         # Opening balance
-        waterfall_data['x'].append('Opening Balance')
+        waterfall_data['x'].append('Opening\nBalance')
         waterfall_data['y'].append(opening_balance)
         waterfall_data['measure'].append('absolute')
         waterfall_data['text'].append(f"{self.currency_symbol}{opening_balance:,.2f}")
@@ -1373,7 +1373,7 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
                     latest_balance = txn['balance']
                     break
         
-        waterfall_data['x'].append('Closing Balance')
+        waterfall_data['x'].append('Closing\nBalance')
         waterfall_data['y'].append(closing_balance)
         waterfall_data['measure'].append('total')
         waterfall_data['text'].append(f"{self.currency_symbol}{closing_balance:,.2f}")
@@ -1412,12 +1412,15 @@ Expenses: {expense_count} transactions ({self.currency_symbol}{expense_total:,.2
         ))
         
         # Compute tick subset — always show Opening/Closing, sample ~12 intermediate labels
+        # Drop indices adjacent to Opening (1) and Closing (n-2) to avoid label overlap
         all_labels = waterfall_data['x']
         n = len(all_labels)
         intermediate_indices = list(range(1, n - 1))  # exclude first (Opening) and last (Closing)
         target_ticks = 12
         step = max(1, len(intermediate_indices) // target_ticks)
         sampled = intermediate_indices[::step]
+        # Remove any sampled tick that sits immediately next to Opening or Closing
+        sampled = [i for i in sampled if i != 1 and i != n - 2]
         tick_indices = [0] + sampled + [n - 1]
         tickvals = [all_labels[i] for i in tick_indices]
         
