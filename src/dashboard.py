@@ -1111,12 +1111,12 @@ class FinancialDashboard:
         # x-axis tick format and spacing
         blue = 'rgba(31, 119, 180, 0.9)'
         if aggregation == 'weekly':
-            tick_format = '%d %b'
+            tick_format = '%b %d, %Y'
             # Show roughly every 4 weeks to avoid crowding
             n_weeks = len(x_dates)
             dtick = max(1, round(n_weeks / 8)) * 7 * 24 * 3600000  # ms
         else:
-            tick_format = '%b %Y'
+            tick_format = '%b %d, %Y'
             dtick = 'M1'
         
         # Build figure with secondary y-axis
@@ -1168,6 +1168,7 @@ class FinancialDashboard:
                 tickformat=tick_format,
                 dtick=dtick,
                 tickangle=0,
+                hoverformat='%b %d, %Y',
             ),
             yaxis=dict(
                 tickprefix=self.currency_symbol,
@@ -1278,16 +1279,16 @@ class FinancialDashboard:
 
             if aggregation == 'daily':
                 period_key = txn_date.strftime('%Y-%m-%d')
-                period_label = txn_date.strftime('%d %b')
+                period_label = txn_date.strftime('%b %d, %Y')
                 canonical_date = txn_date.replace(hour=0, minute=0, second=0, microsecond=0)
             elif aggregation == 'weekly':
                 week_start = txn_date - timedelta(days=txn_date.weekday())
                 period_key = week_start.strftime('%Y-W%U')
-                period_label = week_start.strftime('%d %b')
+                period_label = week_start.strftime('%b %d, %Y')
                 canonical_date = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
             else:  # monthly
                 period_key = txn_date.strftime('%Y-%m')
-                period_label = txn_date.strftime('%b %Y')
+                period_label = txn_date.strftime('%b %d, %Y')
                 canonical_date = txn_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
             if txn['amount'] > 0:
@@ -1428,18 +1429,16 @@ class FinancialDashboard:
             ),
         ))
 
-        tick_format = '%b %Y' if aggregation == 'monthly' else '%d %b'
-
         # Tick values: only intermediate bars (exclude opening at [0] and closing at [-1])
         intermediate_dates = waterfall_data['x'][1:-1]
         step = max(1, len(intermediate_dates) // 12)
         sampled_dates = intermediate_dates[::step]
         tickvals = sampled_dates
-        ticktext = [d.strftime('%b %Y' if aggregation == 'monthly' else '%d %b') for d in sampled_dates]
+        ticktext = [d.strftime('%b %d, %Y') for d in sampled_dates]
 
         fig.update_layout(
             template='plotly_white',
-            hovermode='x',
+            hovermode='closest',
             height=600,
             legend=dict(
                 orientation="h",
@@ -1454,6 +1453,7 @@ class FinancialDashboard:
                 tickvals=tickvals,
                 ticktext=ticktext,
                 tickangle=0,
+                hoverformat='%b %d, %Y',
             ),
             yaxis=dict(
                 tickprefix=self.currency_symbol,
@@ -1792,7 +1792,7 @@ class FinancialDashboard:
             
             row = html.Tr([
                 html.Td(
-                    transaction['date'].strftime('%d %b %Y'),
+                    transaction['date'].strftime('%b %d, %Y'),
                     className="text-nowrap"
                 ),
                 html.Td(payment_method_display, className="text-nowrap"),
@@ -2552,90 +2552,259 @@ class FinancialDashboard:
 
     def _detect_recurring_payments(self, filtered_data: List[Dict]) -> Dict[str, Any]:
         """
-        Detect recurring payments by grouping on (description, amount).
+        Detect genuinely recurring payments (bills, subscriptions, salary).
+
+        Algorithm overview:
+        1. Exclude contactless (payment_method ')))') — habitual purchases, not
+           contractual obligations.
+        2. Group by description, then split each group by sign (income vs expense).
+        3. Within each sign group, **cluster by amount** (15 % tolerance, min £2
+           gap).  Each cluster is evaluated independently so one vendor can produce
+           multiple recurring line-items (e.g. EE LIMITED £15/month and £30/month).
+        4. **Date-anchored expansion**: after an initial cluster establishes a
+           recurring interval, any remaining same-sign transaction whose date
+           falls within ±7 days of an expected occurrence AND whose amount is
+           within 40 % of the cluster median is absorbed.  This catches occasional
+           partial / adjusted payments (e.g. A Vitos £490 on a £650 cycle).
+        5. Qualification thresholds are tiered by payment method:
+             DD / SO : 2+ occ, amount CV ≤ 0.35, interval CV ≤ 0.50
+             BP / CR : 3+ occ, interval CV ≤ 0.45, amount CV ≤ 0.25
+             VIS     : 3+ occ, interval CV ≤ 0.30, amount CV ≤ 0.15
+             other   : 3+ occ, interval CV ≤ 0.45, amount CV ≤ 0.25
+        6. Frequency must fit a known band (median interval):
+             Weekly 5–9 d, Bi-weekly 10–18 d, Monthly 19–40 d,
+             Quarterly 75–105 d, Annual 340–400 d.
+           Items outside all bands are rejected (DD/SO default to Monthly).
 
         Returns dict with keys 'expenses' and 'income', each a list of dicts:
-            vendor, amount, count, avg_interval_days, frequency_label,
-            monthly_cost, annual_cost, last_date, first_date
-        Only includes combos with 3+ occurrences.
+            vendor, payment_method, median_amount, count, median_interval_days,
+            frequency, monthly_cost, annual_cost, first_date, last_date
         """
-        # Group transactions by (description, rounded amount)
-        combos: Dict[tuple, list] = {}
-        for t in filtered_data:
-            key = (t['description'], round(t['amount'], 2))
-            combos.setdefault(key, []).append(t)
+        import statistics
 
-        results = {'expenses': [], 'income': []}
+        # ── helpers ──────────────────────────────────────────────────────────
 
-        for (desc, amount), txns in combos.items():
-            if len(txns) < 3:
-                continue
+        def _to_date(val):
+            if isinstance(val, str):
+                return datetime.fromisoformat(val)
+            return val
 
-            # Sort by date and compute intervals
-            sorted_txns = sorted(txns, key=lambda x: x['date'])
-            intervals = []
-            for i in range(1, len(sorted_txns)):
-                d1 = sorted_txns[i - 1]['date']
-                d2 = sorted_txns[i]['date']
-                if isinstance(d1, str):
-                    d1 = datetime.fromisoformat(d1)
-                if isinstance(d2, str):
-                    d2 = datetime.fromisoformat(d2)
-                delta = (d2 - d1).days
-                if delta > 0:
-                    intervals.append(delta)
+        def _cv(values):
+            """Coefficient of variation (std / mean).  Returns 0 for < 2 values."""
+            if len(values) < 2:
+                return 0.0
+            m = statistics.mean(values)
+            if m == 0:
+                return 0.0
+            return statistics.stdev(values) / abs(m)
 
-            avg_interval = sum(intervals) / len(intervals) if intervals else 0
+        def _classify_frequency(median_interval):
+            """Return frequency label or None if no band matches."""
+            if 5 <= median_interval <= 9:
+                return 'Weekly'
+            if 10 <= median_interval <= 18:
+                return 'Bi-weekly'
+            if 19 <= median_interval <= 40:
+                return 'Monthly'
+            if 75 <= median_interval <= 105:
+                return 'Quarterly'
+            if 340 <= median_interval <= 400:
+                return 'Annual'
+            return None
 
-            # Classify frequency
-            if 25 <= avg_interval <= 35:
-                frequency = 'Monthly'
-                monthly_cost = abs(amount)
-            elif 12 <= avg_interval <= 18:
-                frequency = 'Bi-weekly'
-                monthly_cost = abs(amount) * 2
-            elif 5 <= avg_interval <= 9:
-                frequency = 'Weekly'
-                monthly_cost = abs(amount) * (30.44 / 7)
-            else:
-                frequency = 'Irregular'
-                # Estimate monthly cost from total spend / months spanned
-                first_date = sorted_txns[0]['date']
-                last_date = sorted_txns[-1]['date']
-                if isinstance(first_date, str):
-                    first_date = datetime.fromisoformat(first_date)
-                if isinstance(last_date, str):
-                    last_date = datetime.fromisoformat(last_date)
-                months_spanned = max((last_date - first_date).days / 30.44, 1)
-                monthly_cost = abs(amount) * len(txns) / months_spanned
+        def _monthly_cost(median_amount, frequency):
+            return {
+                'Weekly':     abs(median_amount) * (30.44 / 7),
+                'Bi-weekly':  abs(median_amount) * 2,
+                'Monthly':    abs(median_amount),
+                'Quarterly':  abs(median_amount) / 3,
+                'Annual':     abs(median_amount) / 12,
+            }[frequency]
 
-            annual_cost = monthly_cost * 12
+        def _cluster_amounts(txns_sorted):
+            """
+            Cluster transactions by amount similarity.
 
-            first_date = sorted_txns[0]['date']
-            last_date = sorted_txns[-1]['date']
-            if isinstance(first_date, str):
-                first_date = datetime.fromisoformat(first_date)
-            if isinstance(last_date, str):
-                last_date = datetime.fromisoformat(last_date)
+            Walk through transactions sorted by absolute amount.  Start a new
+            cluster when the gap from the running cluster median exceeds 15 %
+            (with a minimum absolute gap of £2).
 
-            entry = {
-                'vendor': desc,
-                'amount': amount,
-                'count': len(txns),
-                'avg_interval_days': round(avg_interval, 1),
-                'frequency': frequency,
-                'monthly_cost': round(monthly_cost, 2),
-                'annual_cost': round(annual_cost, 2),
-                'first_date': first_date,
-                'last_date': last_date,
+            Returns list of clusters, each a list of transaction dicts.
+            """
+            if not txns_sorted:
+                return []
+            by_abs = sorted(txns_sorted, key=lambda t: abs(t['amount']))
+            clusters: list = [[by_abs[0]]]
+            for t in by_abs[1:]:
+                cur_median = abs(statistics.median(
+                    [x['amount'] for x in clusters[-1]]
+                ))
+                gap = abs(abs(t['amount']) - cur_median)
+                threshold = max(cur_median * 0.15, 2.0)
+                if gap <= threshold:
+                    clusters[-1].append(t)
+                else:
+                    clusters.append([t])
+            return clusters
+
+        def _expand_cluster_by_date(cluster_txns, remaining_txns, frequency):
+            """
+            Date-anchored expansion: absorb remaining transactions that land
+            on an expected recurrence date (±7 days) and whose amount is within
+            40 % of the cluster median.
+            """
+            if not cluster_txns or not remaining_txns:
+                return cluster_txns
+
+            freq_days = {
+                'Weekly': 7, 'Bi-weekly': 14, 'Monthly': 30,
+                'Quarterly': 91, 'Annual': 365,
             }
+            interval = freq_days.get(frequency)
+            if interval is None:
+                return cluster_txns
 
-            if amount < 0:
-                results['expenses'].append(entry)
-            else:
-                results['income'].append(entry)
+            cluster_dates = sorted(_to_date(t['date']) for t in cluster_txns)
+            median_amt = abs(statistics.median([t['amount'] for t in cluster_txns]))
+            amount_tolerance = max(median_amt * 0.40, 50.0)
 
-        # Sort each list by annual cost descending
+            # Build set of expected dates from first cluster date
+            first = cluster_dates[0]
+            last = cluster_dates[-1]
+            expected = set()
+            d = first
+            while d <= last + timedelta(days=interval):
+                expected.add(d)
+                d += timedelta(days=interval)
+
+            absorbed = []
+            for t in remaining_txns:
+                td = _to_date(t['date'])
+                amt_gap = abs(abs(t['amount']) - median_amt)
+                if amt_gap > amount_tolerance:
+                    continue
+                # Skip if a cluster member already covers this date (±1 day)
+                if any(abs((td - cd).days) <= 1 for cd in cluster_dates):
+                    continue
+                # Check if this date is within ±7 days of any expected date
+                for ed in expected:
+                    if abs((td - ed).days) <= 7:
+                        absorbed.append(t)
+                        break
+
+            return cluster_txns + absorbed
+
+        # ── group by description (exclude contactless) ───────────────────────
+
+        groups: Dict[str, list] = {}
+        for t in filtered_data:
+            if t.get('payment_method') == ')))':
+                continue
+            groups.setdefault(t['description'], []).append(t)
+
+        results: Dict[str, list] = {'expenses': [], 'income': []}
+
+        for desc, txns in groups.items():
+            # Dominant payment method
+            methods = [t.get('payment_method', '') for t in txns]
+            payment_method = max(set(methods), key=methods.count) if methods else ''
+
+            # Tiered thresholds
+            is_auto = payment_method in ('DD', 'SO')
+            min_count       = 2 if is_auto else 3
+            max_amount_cv   = 0.35 if is_auto else (0.15 if payment_method == 'VIS' else 0.25)
+            max_interval_cv = 0.50 if is_auto else (0.30 if payment_method == 'VIS' else 0.45)
+
+            # Split by sign: negative = expense, positive = income
+            neg = [t for t in txns if t['amount'] < 0]
+            pos = [t for t in txns if t['amount'] > 0]
+
+            for sign_txns, is_expense in [(neg, True), (pos, False)]:
+                if len(sign_txns) < min_count:
+                    continue
+
+                # Cluster by amount similarity
+                clusters = _cluster_amounts(sign_txns)
+
+                for cluster in clusters:
+                    if len(cluster) < min_count:
+                        # Not enough in the tight cluster yet — may expand below
+                        pass
+
+                    # Sort cluster by date, compute intervals
+                    cluster = sorted(cluster, key=lambda x: _to_date(x['date']))
+                    dates = [_to_date(t['date']) for t in cluster]
+                    intervals = [
+                        (dates[i] - dates[i - 1]).days
+                        for i in range(1, len(dates))
+                        if (dates[i] - dates[i - 1]).days > 0
+                    ]
+
+                    if not intervals:
+                        continue
+
+                    # Preliminary frequency for date-anchored expansion
+                    median_interval = statistics.median(intervals)
+                    frequency = _classify_frequency(median_interval)
+
+                    # Date-anchored expansion: pull in on-schedule outliers
+                    if frequency:
+                        remaining = [t for t in sign_txns if t not in cluster]
+                        cluster = _expand_cluster_by_date(
+                            cluster, remaining, frequency
+                        )
+                        # Re-sort and recompute after expansion
+                        cluster = sorted(
+                            cluster, key=lambda x: _to_date(x['date'])
+                        )
+                        dates = [_to_date(t['date']) for t in cluster]
+                        intervals = [
+                            (dates[i] - dates[i - 1]).days
+                            for i in range(1, len(dates))
+                            if (dates[i] - dates[i - 1]).days > 0
+                        ]
+
+                    if len(cluster) < min_count:
+                        continue
+                    if not intervals:
+                        continue
+
+                    # Amount consistency
+                    amounts = [t['amount'] for t in cluster]
+                    if _cv(amounts) > max_amount_cv:
+                        continue
+
+                    # Interval consistency + frequency classification
+                    median_interval = statistics.median(intervals)
+                    interval_cv = _cv(intervals)
+                    if interval_cv > max_interval_cv:
+                        continue
+                    frequency = _classify_frequency(median_interval)
+                    if frequency is None:
+                        continue
+
+                    median_amount = statistics.median(amounts)
+                    mc = _monthly_cost(median_amount, frequency)
+
+                    entry = {
+                        'vendor': desc,
+                        'payment_method': payment_method,
+                        'median_amount': round(median_amount, 2),
+                        'count': len(cluster),
+                        'median_interval_days': round(median_interval, 1),
+                        'frequency': frequency,
+                        'monthly_cost': round(mc, 2),
+                        'annual_cost': round(mc * 12, 2),
+                        'first_date': dates[0],
+                        'last_date': dates[-1],
+                    }
+
+                    if is_expense:
+                        results['expenses'].append(entry)
+                    else:
+                        results['income'].append(entry)
+
+        # Sort by annual cost descending
         results['expenses'].sort(key=lambda x: x['annual_cost'], reverse=True)
         results['income'].sort(key=lambda x: x['annual_cost'], reverse=True)
 
@@ -2706,15 +2875,24 @@ class FinancialDashboard:
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.H6("Recurring Expense Items", className="text-muted mb-1"),
                 html.H4(f"{len(recurring_data['expenses'])}", className="fw-bold"),
-                html.Small("vendor + amount combos", className="text-muted"),
+                html.Small("bills, subscriptions & scheduled payments", className="text-muted"),
             ]), className="shadow-sm"), width=3),
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.H6("Recurring Income Items", className="text-muted mb-1"),
                 html.H4(f"{len(recurring_data['income'])}", className="fw-bold"),
-                html.Small("vendor + amount combos", className="text-muted"),
+                html.Small("salary, rent & regular credits", className="text-muted"),
             ]), className="shadow-sm"), width=3),
         ], className="mb-4")
         sections.append(summary_cards)
+
+        # Frequency badge colours
+        freq_colors = {
+            'Weekly':     'warning',
+            'Bi-weekly':  'info',
+            'Monthly':    'primary',
+            'Quarterly':  'purple',
+            'Annual':     'dark',
+        }
 
         # Build tables for expenses and income
         for label, entries, color_class in [
@@ -2728,6 +2906,7 @@ class FinancialDashboard:
 
             header = html.Thead(html.Tr([
                 html.Th("Vendor"),
+                html.Th("Method", className="text-center"),
                 html.Th("Amount", className="text-end"),
                 html.Th("Frequency"),
                 html.Th("Occurrences", className="text-center"),
@@ -2738,23 +2917,26 @@ class FinancialDashboard:
 
             rows = []
             for e in entries:
-                # Frequency badge color
-                freq_colors = {
-                    'Monthly': 'primary',
-                    'Bi-weekly': 'info',
-                    'Weekly': 'warning',
-                    'Irregular': 'secondary',
-                }
                 freq_badge = dbc.Badge(
                     e['frequency'],
                     color=freq_colors.get(e['frequency'], 'secondary'),
                     className="px-2 py-1"
                 )
 
+                method = e.get('payment_method', '')
+                method_label = self.get_payment_method_display(method) if method else '—'
+                method_badge = dbc.Badge(
+                    method_label,
+                    color='light',
+                    text_color='dark',
+                    className="px-2 py-1"
+                )
+
                 rows.append(html.Tr([
                     html.Td(e['vendor']),
+                    html.Td(method_badge, className="text-center"),
                     html.Td(
-                        f"{self.currency_symbol}{abs(e['amount']):,.2f}",
+                        f"{self.currency_symbol}{abs(e['median_amount']):,.2f}",
                         className=f"{color_class} fw-bold text-end"
                     ),
                     html.Td(freq_badge),
@@ -2768,7 +2950,7 @@ class FinancialDashboard:
                         className="text-end fw-bold"
                     ),
                     html.Td(
-                        e['last_date'].strftime('%d %b %Y'),
+                        e['last_date'].strftime('%b %d, %Y'),
                         className="text-nowrap"
                     ),
                 ]))
@@ -2782,7 +2964,8 @@ class FinancialDashboard:
 
         if not recurring_data['expenses'] and not recurring_data['income']:
             sections.append(html.P(
-                "No recurring payments detected (need 3+ occurrences of same vendor + amount).",
+                "No recurring payments detected. Qualifying payments need consistent intervals "
+                "and amounts (DD/SO: 2+ occurrences; other methods: 3+ occurrences).",
                 className="text-muted"
             ))
 
@@ -2820,11 +3003,11 @@ class FinancialDashboard:
                     className=f"{color_class} text-end"
                 ),
                 html.Td(
-                    v['first_date'].strftime('%d %b %Y'),
+                    v['first_date'].strftime('%b %d, %Y'),
                     className="text-nowrap"
                 ),
                 html.Td(
-                    v['last_date'].strftime('%d %b %Y'),
+                    v['last_date'].strftime('%b %d, %Y'),
                     className="text-nowrap"
                 ),
             ]))
